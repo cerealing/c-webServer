@@ -8,5 +8,5 @@
 # 网页简介
 我们上网会先打开浏览器输入一个网址，浏览器会把这个网址装进http报文发送给dns服务器，这个dns服务器记录着**网址->IP **的映射关系，他会把对应的IP地址返回给你的浏览器，浏览器再把IP写进http报文发到路由器
 <hr>
-![im](https://raw.githubusercontent.com/cerealing/c-webServer/main/part1--Basic_Web_Server_With_C/tutorial/tutorial.assets/webline.png)
+![网页工作流程图](https://raw.githubusercontent.com/cerealing/c-webServer/main/part1--Basic_Web_Server_With_C/tutorial/tutorial.assets/webline.png)
 <hr>
