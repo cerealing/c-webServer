@@ -6,17 +6,17 @@
 
 ```
 c-webServer/
-├── part1/          # 多线程HTTP Web服务器
-├── part2/          # (计划中) 
-├── part3/          # (计划中)
-├── part4/          # (计划中) 
-├── part5/          # (计划中)
-└── README.md       # 本文件
+├── part1 -- Basic Web Server With C/    # 多线程HTTP Web服务器
+├── part2/                               # (计划中) 
+├── part3/                               # (计划中)
+├── part4/                               # (计划中) 
+├── part5/                               # (计划中)
+└── README.md                            # 本文件
 ```
 
 ## Part 1 - 多线程HTTP Web服务器
 
-📁 **目录**: `part1/`
+📁 **目录**: `part1 -- Basic Web Server With C/`
 
 一个完整的HTTP/1.0 Web服务器实现，展示了：
 
@@ -41,7 +41,7 @@ c-webServer/
 - 学习多线程并发处理
 - 实践系统调用和文件操作
 
-[查看Part 1详细文档 →](part1/README.md)
+[查看Part 1详细文档 →](part1%20--%20Basic%20Web%20Server%20With%20C/README.md)
 
 ---
 
@@ -89,7 +89,7 @@ git clone https://github.com/cerealing/c-webServer.git
 cd c-webServer
 
 # 运行Part 1项目
-cd part1
+cd "part1 -- Basic Web Server With C"
 gcc -Wall -Wextra -pthread myweb.c -o myweb
 ./myweb 8080
 
