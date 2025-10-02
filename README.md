@@ -8,7 +8,7 @@ This tutorial contains 3 chapters. Each chapter includes a tutorial blog (provid
 
 ## Part 1: Basic Multi-thread Server
 
-After finishing this part, you will have a website like [Learn HTML](http://cerealing.me/learn.html) running on Microsoft Azure, located anywhere you like on Earth.
+After finishing this part, you will have a website like [repositories](http://cerealing.me/repositories.html) running on Microsoft Azure, located anywhere you like on Earth.
 
 ![Screenshot](https://github.com/cerealing/c-webServer/blob/main/README.assets/4d5fae00-2a0d-40af-b2ef-3be651f1ab91.png)
 
