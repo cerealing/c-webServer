@@ -10,5 +10,10 @@
 
 ![网页工作流程图](tutorial.assets/webline.png)
 
+## 网络
+计算机网络被分为七层或四层
+![网页工作流程图](tutorial.assets/internet.png)
+![网页工作流程图](tutorial.assets/bi.png)
+
 ## tcp是什么
 简单的解释，tcp就是你的浏览器和提供网页的服务器直接进行的连接，它封装了刚才提到的网络的它就像一部电话
