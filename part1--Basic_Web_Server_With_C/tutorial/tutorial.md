@@ -210,3 +210,52 @@ close(socket);
 - 在你的windows上安装wsl
 - wsl里面安装ss客户端，这样你的本地linux也能访问外网了，这是为了连接github
 - 在wsl里面启动vscode，用code .命令
+- 去学习如何在github创建项目
+
+### 开始写代码
+首先要创建TCP套接字
+
+```c
+int serv_sock = socket(PF_INET, SOCK_STREAM, 0);
+```
+
+在linux中套接字是可以用一个整型int来标识的，socket(套接字)运行在linux内核中，使用socket()返回的int就可以索引到创建的套接字
+
+PF_INET标识设置IPv4协议族，SOCK_STREAM标识是面向连接的套接字，而满足这两个条件的只有TCP，因此最后一个参数不需要再写明为IPPROTO_TCP
+
+接下来要设置套接字的
+
+前面提到，浏览器会发送向服务器发送请求，看起来就像：
+
+```
+GET /XXX.html HTTP/1.1
+```
+
+![网页工作流程图](tutorial.assets/36d40db8-f7d0-48b1-8893-cd880fa367ba.png)
+
+其中GET是请求目的，XXX.html请求的文件，HTTP/1.1是协议与版本
+
+协议可以理解为规定数据传输格式的东西
+
+我们要解析这一行，把要请求的文件xxx.html从请求行中提取出来
+
+```c
+// 读取请求行
+    char req_line[REQ_LINE_SIZE] = {0};
+    if (!fgets(req_line, sizeof(req_line), clnt_read)) {
+        send_400(clnt_write);
+        fclose(clnt_read);
+        fclose(clnt_write);
+        return NULL;
+    }
+
+    // 基本校验
+    if (strstr(req_line, "HTTP/") == NULL) {
+        send_400(clnt_write);
+        fclose(clnt_read);
+        fclose(clnt_write);
+        return NULL;
+    }
+```
+
+由于是HTTP报文的第一行（完整的报文被送到应用层，只留下与应用层有关的，这里是留下HTTP报文），只需要fgets得到第一行，然后检查一下有没有http这个词，没有的话发送400 Bad Request即400请求无效给浏览器
