@@ -121,14 +121,14 @@ static void sanitize_path(char* url, char* out_path, size_t out_size) {
 
     // 根路径 => index.html
     if (*p == '\0') {
-        snprintf(out_path, out_size, "repositories.html");
+        snprintf(out_path, out_size, "learn.html");
         return;
     }
 
     // 简单防目录穿越：替换 ".."
     // 更严格可拒绝包含 ".."
     if (strstr(p, "..")) {
-        snprintf(out_path, out_size, "repositories.html");
+        snprintf(out_path, out_size, "learn.html");
         return;
     }
 
