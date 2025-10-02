@@ -192,8 +192,11 @@ close(socket);
 
 ### 获取服务器
 我们要在Airofoft Azure上白嫖一台服务器
+
 <del>我懒得放图片了，不懂自己去b站找教程，放出步骤指路</del>
+
 <del>我要赶紧搞完这个项目，之后教大家搞GPU实时光线追踪</del>
+
 - 你要申请github的学生认证，github打不开下载steam++加速
 - 你要在你的电脑上安装ssh或者xshell，我默认你的电脑是windows
 - 在github的学生包里找到Airofoft Azure，关联github账户，最好把Copilot和域名也白嫖了
