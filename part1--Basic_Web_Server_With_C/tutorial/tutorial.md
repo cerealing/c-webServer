@@ -13,7 +13,7 @@
 ## 网络
 计算机网络被分为七层或四层
 
-![网页工作流程图](tutorial.assets/internet.png)
+![网页工作流程图](tutorial.assets/internet2.png)
 ![网页工作流程图](tutorial.assets/bi.png)
 
 ## tcp是什么
