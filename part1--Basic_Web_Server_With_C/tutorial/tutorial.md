@@ -223,7 +223,83 @@ int serv_sock = socket(PF_INET, SOCK_STREAM, 0);
 
 PF_INET标识设置IPv4协议族，SOCK_STREAM标识是面向连接的套接字，而满足这两个条件的只有TCP，因此最后一个参数不需要再写明为IPPROTO_TCP
 
-接下来要设置套接字的
+接下来要设置套接字的地址，由于我们是提供网页的服务端（浏览器是客户端）我们需要填写
+1. 地址族
+2. 允许的地址
+3. 运行在服务器上的端口号
+
+地址结构体：
+
+```c
+struct sockaddr_in serv_adr;
+```
+
+用menset初始化结构体，比特位全部置0
+
+```c
+memset(&serv_adr, 0, sizeof(serv_adr));
+```
+
+设置三个属性
+AF_INET是ipv4地址族
+INADDR_ANY是0x00000000允许所有ipv4的客户端ip访问，htonl是转换成网络字节序，因为intel和amd的cpu都是小端序排序变量的，对于 32 位整数 0x12345678，小端序按8位1字节的反过来存储0x78563412，所以要转换成网络的大端序，htonl转换成32位long型（即使long在linux上是64位，这里还是转换成32位，这是一个历史遗留问题）。
+argv是启动程序时命令行传进来的端口号，atoi转换成int，htons转换成网络大端short型16位
+
+```c
+serv_adr.sin_family = AF_INET;
+serv_adr.sin_addr.s_addr = htonl(INADDR_ANY);
+serv_adr.sin_port = htons((uint16_t)atoi(argv[1]));
+```
+
+绑定地址属性并开始监听客户端请求，BACKLOG代表排队的长度，如果一下子来了很多人，那么只有前BACKLOG个人可以排队，然后客户端依序处理
+
+```c
+    if (bind(serv_sock, (struct sockaddr*)&serv_adr, sizeof(serv_adr)) == -1)
+        fatal("bind");
+    if (listen(serv_sock, BACKLOG) == -1)
+        fatal("listen");
+
+    printf("Mini HTTP server running on port %s ...\n", argv[1]);
+```
+
+一个个处理，服务端先创建一个和客户端连接的套接字，接受连接请求
+
+```c
+    struct sockaddr_in clnt_adr;
+    socklen_t clnt_adr_size = sizeof(clnt_adr);
+    int s = accept(serv_sock, (struct sockaddr*)&clnt_adr, &clnt_adr_size);
+```
+
+具体过程：
+
+客户端调用 connect()
+触发三次握手，向服务端发送 SYN 包。
+
+服务端监听端口（listen()）等待连接，收到 SYN 包后，内核为其创建半连接并回复 SYN+ACK。
+此时服务端程序还未调用 accept()，但内核已为新连接分配资源。
+
+客户端收到 SYN+ACK，回复 ACK，并建立连接。
+
+服务端的连接队列里已有完成三次握手的连接，此时服务端程序调用 accept()，从队列里取出已建立的连接，获取对应的套接字（socket）。
+
+获取套接字后创建一个线程来处理请求
+
+```c
+    pthread_t t_id;
+        if (pthread_create(&t_id, NULL, request_handler, ps) != 0) {
+            perror("pthread_create");
+            close(s);
+            free(ps);
+            continue;
+        }
+```
+
+分离客户端的读写流
+
+```c
+    FILE* clnt_read = NULL;
+    FILE* clnt_write = NULL;
+```
 
 前面提到，浏览器会发送向服务器发送请求，看起来就像：
 
@@ -259,3 +335,45 @@ GET /XXX.html HTTP/1.1
 ```
 
 由于是HTTP报文的第一行（完整的报文被送到应用层，只留下与应用层有关的，这里是留下HTTP报文），只需要fgets得到第一行，然后检查一下有没有http这个词，没有的话发送400 Bad Request即400请求无效给浏览器
+
+把get要get的文件名提取出来
+
+```c
+// 解析方法、URL
+    char method[16] = {0};
+    char url[512] = {0};
+    char version[16] = {0};
+    // 用空格切分
+    if (sscanf(req_line, "%15s %511s %15s", method, url, version) != 3) {
+        send_400(clnt_write);
+        fclose(clnt_read);
+        fclose(clnt_write);
+        return NULL;
+    }
+```
+
+url就拿到了文件路径
+
+这时候就要根据对方请求了什么来填写我们的发送报文头
+
+```c
+static const char* guess_mime(const char* path) {
+    const char* ext = strrchr(path, '.');
+    if (!ext) return "application/octet-stream";
+    if (!strcasecmp(ext, ".html") || !strcasecmp(ext, ".htm"))   return "text/html; charset=utf-8";
+    if (!strcasecmp(ext, ".txt"))                                return "text/plain; charset=utf-8";
+    if (!strcasecmp(ext, ".css"))                                return "text/css; charset=utf-8";
+    if (!strcasecmp(ext, ".js"))                                 return "application/javascript; charset=utf-8";
+    if (!strcasecmp(ext, ".json"))                               return "application/json; charset=utf-8";
+    if (!strcasecmp(ext, ".svg"))                                return "image/svg+xml";
+    if (!strcasecmp(ext, ".png"))                                return "image/png";
+    if (!strcasecmp(ext, ".jpg") || !strcasecmp(ext, ".jpeg"))   return "image/jpeg";
+    if (!strcasecmp(ext, ".gif"))                                return "image/gif";
+    if (!strcasecmp(ext, ".ico"))                                return "image/x-icon";
+    if (!strcasecmp(ext, ".pdf"))                                return "application/pdf";
+    return "application/octet-stream";
+}
+```
+
+
+
