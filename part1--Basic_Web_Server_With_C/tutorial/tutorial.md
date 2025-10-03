@@ -375,5 +375,139 @@ static const char* guess_mime(const char* path) {
 }
 ```
 
+前面提到，浏览器会发送向服务器发送请求，我们服务器也会发送回复，看起来就像：
 
+```
+GET /XXX.html HTTP/1.1
+```
 
+![网页工作流程图](tutorial.assets/36d40db8-f7d0-48b1-8893-cd880fa367ba.png)
+
+准备好我们的报头：
+
+```c
+static void send_headers(FILE* fp,
+                         const char* status_line,
+                         const char* content_type,
+                         size_t content_length,
+                         const char* extra_headers) {
+    fprintf(fp,
+            "%s\r\n"
+            "Server: Mini C Web Server\r\n"
+            "Content-Type: %s\r\n"
+            "Content-Length: %zu\r\n"
+            "Connection: close\r\n",
+            status_line, content_type, content_length);
+    if (extra_headers && *extra_headers) {
+        fputs(extra_headers, fp); // 每行应以 \r\n 结尾
+    }
+    fputs("\r\n", fp); // 结束头部
+    fflush(fp);
+}
+```
+
+然后发送浏览器请求的文件：
+
+```c
+// 文件走流式
+static void send_file(FILE* fp, const char* file_path) {
+    struct stat st;
+    if (stat(file_path, &st) != 0 || !S_ISREG(st.st_mode)) {
+        send_404(fp);
+        return;
+    }
+    FILE* f = fopen(file_path, "rb");
+    if (!f) { send_404(fp); return; }
+
+    const char* mime = guess_mime(file_path);
+                            send_headers(fp, "HTTP/1.0 200 OK", mime, (size_t)st.st_size, NULL);
+
+    char buf[BUF_SIZE];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
+        fwrite(buf, 1, n, fp);
+    }
+    fclose(f);
+    fflush(fp);
+}
+```
+
+200ok代表流量器的请求成功了
+
+接下来准备我们的html文件，html叫超文本传输格式，就是一个文件，他格式化了网站了样貌，哪里写字，哪里贴图片，哪里贴链接
+
+我们先写一个简单的网页，里面有一个链接到我的github项目仓库页面
+创建一个XX.learn文件
+
+```html
+<!-- learn.html -->
+<!docttype html>
+<html lang = "en">
+<head>
+ <meta charset = "UTF - 8">
+ <title>学习用html</title>
+ <style type = "text/css">
+         h2{text-align:center;background:#0000FF;padding:100px;margin: 0,20px;}
+         p{text-indent:2em;}
+ </style>
+</head>
+<body background = ""text = "#882222">
+        <h2 align = "center">你&nbsp;好</h2>
+        <hr size = "2" color = "#884422" width = "100%"/>
+        <h3 align = "center"><a href = "https://github.com/cerealing?tab=repositories">点击访问我的github项目</a></h3>
+        <hr size = "2" color = "#884422" width = "100%"/>
+        <img src = "im.png" style="display: block; margin: 20px auto;"/>
+</body>
+</html>
+```
+
+<title>学习用html</title>
+是网页的标签栏，就是最顶上的滑块会显示什么
+ <style type = "text/css">
+         h2{text-align:center;background:#0000FF;padding:100px;margin: 0,20px;}
+         p{text-indent:2em;}
+ </style>
+ 是网页中h2,p标签的格式，其中h2标签text-align:center;就是居中显示，background:#0000FF;
+ 就是背景色，对于“你好”背景的蓝色，padding:100px;是这个标签块的大小，margin: 0,20px;是边框大小
+
+body里面就写网页的具体内容
+
+<h3 align = "center"><a href = "https://github.com/cerealing?tab=repositories">点击访问我的github项目</a></h3>
+这个是贴链接
+
+<img src = "im.png" style="display: block; margin: 20px auto;"/>
+这个是贴图片，记住图片要放在""的目录里面，我这里没有带目录，就是im.png放在与myweb.c编译后的可执行文件相同的目录下，也可以带目录像"imdir/im.png"这时候就要在与myweb.c编译后的可执行文件相同的目录下新建一个imdir文件夹把im.png放进去
+
+好了，代码写完了
+你现在就要在vs code的命令行里面使用git命令把你的代码上传到你的git仓库
+<del>什么，你不会用git命令？</del>
+去问Copilot啊，Copilot就是github的人工智能，之前申请学生包的时候不是赠送了吗，还有之前的安装ss脚本命令，都去问Copilot吧
+然后根据Copilot的指引ssh登进你的服务器，git clone你的仓库，在仓库里面找到你的myweb.c文件，如果你没编译要先gcc编译，如果你是编译好了再上传的就可以直接打开编译后的可执行文件了，像这样打开：
+
+```bash
+./myweb 80
+``` 
+
+然后就可以去浏览器上输入
+你的服务器IP/XX.html就可以访问了
+
+但是这个启动后你把黑窗口关掉了就会自动关闭
+你需要systemd守护这个myweb程序，去问问Copilot吧！
+
+最后如果你绑好了白嫖的域名，输入
+你的域名/XX.html也可以访问！
+甚至登录你的服务器时可以
+
+```bash
+ssh 你的用户名@你的域名
+```
+
+好了本章的内容结束了，我会继续把2,3章快速搞出来的！
+后续内容前瞻
+我后续就会写关于图形学的项目了，因为我要找游戏相关的工作，网络这一块不打算作为从业方向，当然虚幻5里面联机可能还会用到吧，游戏服务器可能还会用到吧
+1. opengl骨骼动画
+2. opengl软光追，包括BRDF，重要性采样等内容
+3. 布料模拟，包括折叠布料物理特性什么的
+4. 虚幻5引擎的学习笔记
+
+非常感谢你的观看！！！
