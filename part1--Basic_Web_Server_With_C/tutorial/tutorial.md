@@ -252,6 +252,7 @@ serv_adr.sin_port = htons((uint16_t)atoi(argv[1]));
 ```
 
 绑定地址属性并开始监听客户端请求，BACKLOG代表排队的长度，如果一下子来了很多人，那么只有前BACKLOG个人可以排队，然后客户端依序处理
+sockaddr_in又转换成sockaddr是因为在sockaddr_in里绑定数据方便
 
 ```c
     if (bind(serv_sock, (struct sockaddr*)&serv_adr, sizeof(serv_adr)) == -1)
@@ -355,6 +356,7 @@ GET /XXX.html HTTP/1.1
 url就拿到了文件路径
 
 这时候就要根据对方请求了什么来填写我们的发送报文头
+这里根据浏览器请求的文件格式拿到我们的消息头content-type内容
 
 ```c
 static const char* guess_mime(const char* path) {
@@ -378,10 +380,13 @@ static const char* guess_mime(const char* path) {
 前面提到，浏览器会发送向服务器发送请求，我们服务器也会发送回复，看起来就像：
 
 ```
-GET /XXX.html HTTP/1.1
+Connect-type : XX.html
 ```
 
-![网页工作流程图](tutorial.assets/36d40db8-f7d0-48b1-8893-cd880fa367ba.png)
+![网页工作流程图](tutorial.assets/518a99566b6cd97216ec0aa9878d1044.png)
+
+除此之外还要填写状态信息：http/1.1 200ok
+一共包含多少字节: content-length这个通过结构体struct stat st;得到
 
 准备好我们的报头：
 
