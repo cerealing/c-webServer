@@ -461,21 +461,35 @@ static void send_file(FILE* fp, const char* file_path) {
 </html>
 ```
 
+```html
 <title>学习用html</title>
+```
+
 是网页的标签栏，就是最顶上的滑块会显示什么
+
+```html
  <style type = "text/css">
          h2{text-align:center;background:#0000FF;padding:100px;margin: 0,20px;}
          p{text-indent:2em;}
  </style>
+ ```
+
  是网页中h2,p标签的格式，其中h2标签text-align:center;就是居中显示，background:#0000FF;
  就是背景色，对于“你好”背景的蓝色，padding:100px;是这个标签块的大小，margin: 0,20px;是边框大小
 
 body里面就写网页的具体内容
 
+```html
+<h3 align = "center"><a href = "https://github.com/cerealing?tab=repositories">点击访问我的github项目</a></h3>
+```
+
 <h3 align = "center"><a href = "https://github.com/cerealing?tab=repositories">点击访问我的github项目</a></h3>
 这个是贴链接
 
+```html
 <img src = "im.png" style="display: block; margin: 20px auto;"/>
+```
+
 这个是贴图片，记住图片要放在""的目录里面，我这里没有带目录，就是im.png放在与myweb.c编译后的可执行文件相同的目录下，也可以带目录像"imdir/im.png"这时候就要在与myweb.c编译后的可执行文件相同的目录下新建一个imdir文件夹把im.png放进去
 
 好了，代码写完了
