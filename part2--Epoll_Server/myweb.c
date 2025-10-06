@@ -114,7 +114,7 @@ static void send_file(FILE* fp, const char* file_path) {
     if (!f) { send_404(fp); return; }
 
     const char* mime = guess_mime(file_path);
-                            send_headers(fp, "HTTP/1.0 200 OK", mime, (size_t)st.st_size, NULL);
+    send_headers(fp, "HTTP/1.0 200 OK", mime, (size_t)st.st_size, NULL);
 
     char buf[BUF_SIZE];
     size_t n;
@@ -151,11 +151,8 @@ static void sanitize_path(char* url, char* out_path, size_t out_size) {
     snprintf(out_path, out_size, "%s", p);
 }
 
-static void* request_handler(void* arg) {
-    struct thread_args* args = (struct thread_args*)arg;
-    int fd = args->fd;
-    int epfd = args->epfd;
-    free(args);
+void request_handler(int arg) {
+    int fd = arg;
 
     FILE* clnt_read = NULL;
     FILE* clnt_write = NULL;
@@ -164,14 +161,14 @@ static void* request_handler(void* arg) {
     clnt_read = fdopen(fd, "r");
     if (!clnt_read) {
         close(fd);
-        return NULL;
+        return;
     }
 
     // 2) 先 dup 写 fd
     int fdw = dup(fd);
     if (fdw < 0) {
         fclose(clnt_read); // 关闭原始 fd
-        return NULL;
+        return;
     }
 
     // 3) 再用 dup 的 fd 包装写流
@@ -179,7 +176,7 @@ static void* request_handler(void* arg) {
     if (!clnt_write) {
         close(fdw);        // 只关 dup 的这个 fd
         fclose(clnt_read); // 关原始 fd
-        return NULL;
+        return;
     }
 
     // 读取请求行
@@ -189,7 +186,7 @@ static void* request_handler(void* arg) {
         send_400(clnt_write);
         fclose(clnt_read);
         fclose(clnt_write);
-        return NULL;
+        return;
     }
 
     // 基本校验
@@ -198,7 +195,7 @@ static void* request_handler(void* arg) {
         send_400(clnt_write);
         fclose(clnt_read);
         fclose(clnt_write);
-        return NULL;
+        return;
     }
 
     // 解析方法、URL
@@ -211,14 +208,14 @@ static void* request_handler(void* arg) {
         send_400(clnt_write);
         fclose(clnt_read);
         fclose(clnt_write);
-        return NULL;
+        return;
     }
 
     if (strcmp(method, "GET") != 0) {
         send_405(clnt_write);
         fclose(clnt_read);
         fclose(clnt_write);
-        return NULL;
+        return;
     }
 
     // 丢弃剩余请求头
@@ -234,11 +231,8 @@ static void* request_handler(void* arg) {
     // 发送文件
     send_file(clnt_write, path);
 
-    epoll_ctl(epfd, EPOLL_CTL_DEL, fd, NULL);
     fclose(clnt_read);
     fclose(clnt_write);
-    
-    return NULL;
 }
 
 int main(int argc, char* argv[]) {
@@ -302,7 +296,7 @@ int main(int argc, char* argv[]) {
                     continue;
                 }
                 setnonblockingmode(s);
-                event.events = EPOLLIN|EPOLLET;
+                event.events = EPOLLIN;
                 event.data.fd = s;
                 if (epoll_ctl(epfd, EPOLL_CTL_ADD, s, &event) == -1) {
                     perror("epoll_ctl");
@@ -313,25 +307,8 @@ int main(int argc, char* argv[]) {
             }
             else
             {
-                struct thread_args* args = malloc(sizeof(struct thread_args));
-                if (!args) 
-                {
-                    perror("malloc");
-                    close(ep_events[i].data.fd);
-                    continue;
-                }
-                args->fd = ep_events[i].data.fd;
-                args->epfd = epfd;
-
-                pthread_t t_id;
-                if (pthread_create(&t_id, NULL, request_handler, args) != 0) 
-                {
-                    perror("pthread_create");
-                    close(ep_events[i].data.fd);
-                    free(args);
-                    continue;
-                }
-                pthread_detach(t_id);
+                request_handler(ep_events[i].data.fd);
+                epoll_ctl(epfd, EPOLL_CTL_DEL, ep_events[i].data.fd, NULL);
             }
         }
     }
