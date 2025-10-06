@@ -9,76 +9,123 @@
 #include "template_engine.h"
 #include "db.h"
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <signal.h>
+#include <csignal>
+#include <cstdio>
+#include <filesystem>
+#include <memory>
 
-static volatile int running = 1;
+namespace {
 
-static void handle_sigint(int signo) {
+struct LoggerGuard {
+    ~LoggerGuard() { logger_close(); }
+};
+
+struct ResponseQueueGuard {
+    explicit ResponseQueueGuard(concurrent_queue_t &queue)
+        : queue_(queue), initialized_(cq_init(&queue_) == 0) {}
+
+    ResponseQueueGuard(const ResponseQueueGuard &) = delete;
+    ResponseQueueGuard &operator=(const ResponseQueueGuard &) = delete;
+
+    ~ResponseQueueGuard() {
+        if (initialized_) {
+            cq_destroy(&queue_, worker_response_dispose);
+        }
+    }
+
+    bool ok() const noexcept { return initialized_; }
+
+private:
+    concurrent_queue_t &queue_;
+    bool initialized_;
+};
+
+void handle_sigint(int signo) {
     (void)signo;
-    running = 0;
 }
 
+} // namespace
+
 int main(int argc, char *argv[]) {
-    const char *config_path = "config/dev_stub.json";
-    if (argc > 1) config_path = argv[1];
-
-    server_runtime_t runtime = {0};
-    int rc = 1;
-    int queue_ready = 0;
-    config_load(config_path, &runtime.config);
-
-    if (logger_init(runtime.config.log_path) != 0) {
-        fprintf(stderr, "Failed to open log file %s\n", runtime.config.log_path);
+    std::filesystem::path config_path = "config/dev_stub.json";
+    if (argc > 1) {
+        config_path = argv[1];
     }
+
+    mail::ServerRuntime runtime{};
+    mail::load_config(config_path, runtime.config);
+
+    std::fprintf(stderr, "[maild] config loaded from %s\n", config_path.string().c_str());
+
+    const std::string log_target = runtime.config.log_target();
+    if (logger_init(log_target.c_str()) != 0) {
+        std::fprintf(stderr, "Failed to open log file %s\n", log_target.c_str());
+    }
+    LOGI("logger initialized (target=%s)", log_target.c_str());
     logger_set_level(LOG_DEBUG);
+    LoggerGuard logger_guard;
 
     thread_pool_config_t pool_cfg{};
-    pool_cfg.thread_count = static_cast<size_t>(runtime.config.thread_pool_size);
-    pool_cfg.queue_capacity = static_cast<size_t>(runtime.config.thread_pool_size) * 4;
+    pool_cfg.thread_count = runtime.config.thread_pool_size;
+    pool_cfg.queue_capacity = runtime.config.thread_pool_size * 4;
     pool_cfg.on_error = NULL;
 
-    runtime.pool = thread_pool_create(&pool_cfg);
-    if (!runtime.pool) {
+    using ThreadPoolPtr = std::unique_ptr<thread_pool_t, decltype(&thread_pool_destroy)>;
+    ThreadPoolPtr pool(thread_pool_create(&pool_cfg), thread_pool_destroy);
+    if (!pool) {
         LOGF("failed to create thread pool");
-        goto cleanup;
+        return 1;
     }
+    runtime.pool = pool.get();
+    LOGI("thread pool ready with %zu threads", runtime.config.thread_pool_size);
 
-    if (cq_init(&runtime.response_queue) != 0) {
+    ResponseQueueGuard response_queue_guard(runtime.response_queue);
+    if (!response_queue_guard.ok()) {
         LOGF("failed to init response queue");
-        goto cleanup;
+        return 1;
     }
-    queue_ready = 1;
+    LOGI("response queue initialized");
 
-    if (db_init(&runtime.config, &runtime.db) != 0) {
+    db_handle_t *db_raw = nullptr;
+    if (db_init(runtime.config, &db_raw) != 0) {
         LOGF("failed to initialize database backend");
-        goto cleanup;
+        return 1;
     }
+    using DbPtr = std::unique_ptr<db_handle_t, decltype(&db_close)>;
+    DbPtr db(db_raw, db_close);
+    runtime.db = db.get();
+    LOGI("database backend ready");
 
-    runtime.auth = auth_service_create(runtime.db);
-    runtime.mail = mail_service_create(runtime.db, &runtime.config);
-    runtime.templates = template_engine_create(runtime.config.template_dir);
-    if (!runtime.auth || !runtime.mail || !runtime.templates) {
+    using AuthPtr = std::unique_ptr<auth_context_t, decltype(&auth_service_destroy)>;
+    using MailPtr = std::unique_ptr<mail_service_t, decltype(&mail_service_destroy)>;
+    using TemplatePtr = std::unique_ptr<template_engine_t, decltype(&template_engine_destroy)>;
+
+    AuthPtr auth(auth_service_create(runtime.db), auth_service_destroy);
+    MailPtr mail(mail_service_create(runtime.db, runtime.config), mail_service_destroy);
+    TemplatePtr templates(template_engine_create(runtime.config.template_dir.string().c_str()), template_engine_destroy);
+
+    if (!auth || !mail || !templates) {
         LOGF("failed to initialize services");
-        goto cleanup;
+        return 1;
     }
+    runtime.auth = auth.get();
+    runtime.mail = mail.get();
+    runtime.templates = templates.get();
+    LOGI("auth/mail/template services initialized");
 
-    signal(SIGINT, handle_sigint);
-    signal(SIGTERM, handle_sigint);
+    std::signal(SIGINT, handle_sigint);
+    std::signal(SIGTERM, handle_sigint);
+    LOGI("signal handlers registered");
 
-    rc = server_run(&runtime);
+    const int rc = mail::server_run(&runtime);
 
-cleanup:
-    template_engine_destroy(runtime.templates);
-    mail_service_destroy(runtime.mail);
-    auth_service_destroy(runtime.auth);
-    if (runtime.db) db_close(runtime.db);
-    if (runtime.pool) thread_pool_destroy(runtime.pool);
-    if (queue_ready) {
-        cq_destroy(&runtime.response_queue, (void (*)(void *))worker_response_free);
-    }
-    logger_close();
+    LOGI("server_run exited with code %d", rc);
+
+    runtime.templates = nullptr;
+    runtime.mail = nullptr;
+    runtime.auth = nullptr;
+    runtime.db = nullptr;
+    runtime.pool = nullptr;
+
     return rc;
 }

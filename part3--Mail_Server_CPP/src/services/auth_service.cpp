@@ -98,10 +98,9 @@ int auth_service_login(auth_context_t *ctx, const char *username, const char *pa
         pthread_mutex_unlock(&ctx->mutex);
         return -1;
     }
-    session_record_t rec = {
-        .user_id = user.id,
-        .expires_at = time(NULL) + SESSION_EXPIRY_SECS
-    };
+    session_record_t rec{};
+    rec.user_id = user.id;
+    rec.expires_at = time(NULL) + SESSION_EXPIRY_SECS;
     strcpy(rec.token, token);
     ctx->sessions[ctx->count++].session = rec;
     pthread_mutex_unlock(&ctx->mutex);
@@ -146,11 +145,10 @@ int auth_service_validate(auth_context_t *ctx, const char *token, user_record_t 
     }
     return 0;
 }
-
 int auth_service_register(auth_context_t *ctx, const char *username, const char *email, const char *password,
                           char *token_out, size_t token_len, user_record_t *user_out) {
     if (!ctx || !username || !email || !password || !token_out) return -1;
-    user_record_t created = {0};
+    user_record_t created{};
     int rc = db_create_user(ctx->db, username, email, password, &created);
     if (rc != 0) {
         return rc;

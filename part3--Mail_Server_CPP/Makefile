@@ -3,7 +3,7 @@ BUILD   ?= build
 TARGET  := $(BUILD)/maild
 
 SRC := $(wildcard src/*.cpp) $(wildcard src/services/*.cpp)
-CXXFLAGS ?= -std=c++20 -O2 -g -D_GNU_SOURCE -Iinclude -Wall -fpermissive
+CXXFLAGS ?= -std=c++20 -O2 -g -D_GNU_SOURCE -Iinclude -Wall -Wextra -Wpedantic
 LDFLAGS ?= -lpthread
 
 ifdef USE_REAL_MYSQL

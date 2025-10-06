@@ -11,6 +11,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <cstdio>
+#include <string>
 #include <ctype.h>
 #include <stdarg.h>
 #include <sys/stat.h>
@@ -18,6 +19,8 @@
 #include <strings.h>
 
 #define JSON_TOKEN_COUNT 768
+
+namespace mail {
 
 typedef struct {
     char *buf;
@@ -143,7 +146,7 @@ static void respond_with_json_writer(http_response_t *res, int status_code, cons
 }
 
 static void respond_with_error(http_response_t *res, int status_code, const char *code, const char *message) {
-    json_writer_t jw = {0};
+    json_writer_t jw{};
     jw_append(&jw, "{\"error\":{");
     jw_append(&jw, "\"code\":");
     jw_append_json_string(&jw, code);
@@ -249,7 +252,7 @@ static int json_get_long(const char *json, const jsmntok_t *tok, long long *out)
     return 0;
 }
 
-static void respond_with_template(server_runtime_t *rt, http_response_t *res, const char *name,
+static void respond_with_template(ServerRuntime *rt, http_response_t *res, const char *name,
                                   const template_var_t *vars, size_t var_count) {
     char *html = NULL;
     size_t len = 0;
@@ -365,7 +368,7 @@ static const char *mime_from_path(const char *path) {
     return "application/octet-stream";
 }
 
-static void respond_with_static(server_runtime_t *rt, http_response_t *res, const char *rel_path) {
+static void respond_with_static(ServerRuntime *rt, http_response_t *res, const char *rel_path) {
     char effective[512];
     if (!rel_path || rel_path[0] == '\0') {
         strcpy(effective, "index.html");
@@ -382,7 +385,8 @@ static void respond_with_static(server_runtime_t *rt, http_response_t *res, cons
         }
     }
     char fullpath[1024];
-    if (build_safe_path(rt->config.static_dir, effective, fullpath, sizeof(fullpath)) != 0) {
+    const std::string static_root = rt->config.static_dir.string();
+    if (build_safe_path(static_root.c_str(), effective, fullpath, sizeof(fullpath)) != 0) {
         respond_with_error(res, 400, "bad_path", "Invalid static path");
         return;
     }
@@ -421,7 +425,7 @@ static void respond_unauthorized(http_response_t *res) {
     http_response_set_header(res, "WWW-Authenticate", "Bearer realm=\"mail\"");
 }
 
-static int ensure_authenticated(server_runtime_t *rt, const http_request_t *req, http_response_t *res,
+static int ensure_authenticated(ServerRuntime *rt, const http_request_t *req, http_response_t *res,
                                 user_record_t *user_out, char *token_buf, size_t token_len) {
     if (extract_bearer_token(req, token_buf, token_len) != 0) {
         respond_unauthorized(res);
@@ -690,7 +694,7 @@ static int is_valid_password(const char *password) {
     return len >= 6 && len < PASSWORD_HASH_MAX;
 }
 
-static void handle_register(server_runtime_t *rt, http_request_t *req, http_response_t *res) {
+static void handle_register(ServerRuntime *rt, http_request_t *req, http_response_t *res) {
     if (!req->body) {
         respond_with_error(res, 400, "bad_request", "Missing request body");
         return;
@@ -739,7 +743,7 @@ static void handle_register(server_runtime_t *rt, http_request_t *req, http_resp
     }
 
     char token[65];
-    user_record_t user = {0};
+    user_record_t user{};
     int rc = auth_service_register(rt->auth, username, email, password, token, sizeof(token), &user);
     free(tokens);
     if (rc == DB_ERR_DUP_USERNAME) {
@@ -755,7 +759,7 @@ static void handle_register(server_runtime_t *rt, http_request_t *req, http_resp
         return;
     }
 
-    json_writer_t jw = {0};
+    json_writer_t jw{};
     jw_append(&jw, "{\"token\":");
     jw_append_json_string(&jw, token);
     jw_append(&jw, ",\"user\":");
@@ -764,7 +768,7 @@ static void handle_register(server_runtime_t *rt, http_request_t *req, http_resp
     respond_with_json_writer(res, 201, "Created", &jw);
 }
 
-static void handle_login(server_runtime_t *rt, http_request_t *req, http_response_t *res) {
+static void handle_login(ServerRuntime *rt, http_request_t *req, http_response_t *res) {
     if (!req->body) {
         respond_with_error(res, 400, "bad_request", "Missing request body");
         return;
@@ -792,13 +796,13 @@ static void handle_login(server_runtime_t *rt, http_request_t *req, http_respons
     }
 
     char token[65];
-    user_record_t user = {0};
+    user_record_t user{};
     if (auth_service_login(rt->auth, username, password, token, sizeof(token), &user) != 0) {
         free(tokens);
         respond_with_error(res, 401, "invalid_credentials", "Username or password incorrect");
         return;
     }
-    json_writer_t jw = {0};
+    json_writer_t jw{};
     jw_append(&jw, "{\"token\":");
     jw_append_json_string(&jw, token);
     jw_append(&jw, ",\"user\":");
@@ -808,43 +812,43 @@ static void handle_login(server_runtime_t *rt, http_request_t *req, http_respons
     free(tokens);
 }
 
-static void handle_logout(server_runtime_t *rt, http_request_t *req, http_response_t *res) {
+static void handle_logout(ServerRuntime *rt, http_request_t *req, http_response_t *res) {
     char token[128];
     if (extract_bearer_token(req, token, sizeof(token)) != 0) {
         respond_unauthorized(res);
         return;
     }
     auth_service_logout(rt->auth, token);
-    json_writer_t jw = {0};
+    json_writer_t jw{};
     jw_append(&jw, "{\"success\":true}");
     respond_with_json_writer(res, 200, "OK", &jw);
 }
 
-static void handle_session(server_runtime_t *rt, http_request_t *req, http_response_t *res) {
-    user_record_t user = {0};
+static void handle_session(ServerRuntime *rt, http_request_t *req, http_response_t *res) {
+    user_record_t user{};
     char token[128];
     if (ensure_authenticated(rt, req, res, &user, token, sizeof(token)) != 0) {
         return;
     }
-    json_writer_t jw = {0};
+    json_writer_t jw{};
     jw_append(&jw, "{\"user\":");
     json_write_user(&jw, &user);
     jw_append_char(&jw, '}');
     respond_with_json_writer(res, 200, "OK", &jw);
 }
 
-static void handle_mailboxes(server_runtime_t *rt, http_request_t *req, http_response_t *res) {
-    user_record_t user = {0};
+static void handle_mailboxes(ServerRuntime *rt, http_request_t *req, http_response_t *res) {
+    user_record_t user{};
     char token[128];
     if (ensure_authenticated(rt, req, res, &user, token, sizeof(token)) != 0) {
         return;
     }
-    folder_list_t folders = {0};
+    folder_list_t folders{};
     if (mail_service_list_mailboxes(rt->mail, user.id, &folders) != 0) {
         respond_with_error(res, 500, "db_error", "Failed to load mailboxes");
         return;
     }
-    json_writer_t jw = {0};
+    json_writer_t jw{};
     jw_append(&jw, "{\"folders\":");
     json_write_folder_list(&jw, &folders);
     jw_append_char(&jw, '}');
@@ -852,8 +856,8 @@ static void handle_mailboxes(server_runtime_t *rt, http_request_t *req, http_res
     folder_list_free(&folders);
 }
 
-static void handle_messages_list(server_runtime_t *rt, http_request_t *req, http_response_t *res, const char *query) {
-    user_record_t user = {0};
+static void handle_messages_list(ServerRuntime *rt, http_request_t *req, http_response_t *res, const char *query) {
+    user_record_t user{};
     char token[128];
     if (ensure_authenticated(rt, req, res, &user, token, sizeof(token)) != 0) {
         return;
@@ -866,7 +870,7 @@ static void handle_messages_list(server_runtime_t *rt, http_request_t *req, http
             return;
         }
     }
-    char custom[GROUP_NAME_MAX] = {0};
+    char custom[GROUP_NAME_MAX]{};
     if (query_get_param(query, "custom", custom, sizeof(custom)) != 0) {
         custom[0] = '\0';
     }
@@ -874,12 +878,12 @@ static void handle_messages_list(server_runtime_t *rt, http_request_t *req, http
         respond_with_error(res, 400, "bad_request", "custom folder name required");
         return;
     }
-    message_list_t list = {0};
+    message_list_t list{};
     if (mail_service_list_messages(rt->mail, user.id, folder, custom[0] ? custom : NULL, &list) != 0) {
         respond_with_error(res, 500, "db_error", "Failed to load messages");
         return;
     }
-    json_writer_t jw = {0};
+    json_writer_t jw{};
     jw_append(&jw, "{\"messages\":");
     json_write_message_list(&jw, &list);
     jw_append_char(&jw, '}');
@@ -887,19 +891,19 @@ static void handle_messages_list(server_runtime_t *rt, http_request_t *req, http
     message_list_free(&list);
 }
 
-static void handle_message_get(server_runtime_t *rt, http_request_t *req, http_response_t *res, uint64_t message_id) {
-    user_record_t user = {0};
+static void handle_message_get(ServerRuntime *rt, http_request_t *req, http_response_t *res, uint64_t message_id) {
+    user_record_t user{};
     char token[128];
     if (ensure_authenticated(rt, req, res, &user, token, sizeof(token)) != 0) {
         return;
     }
-    message_record_t msg = {0};
-    attachment_list_t attachments = {0};
+    message_record_t msg{};
+    attachment_list_t attachments{};
     if (mail_service_get_message(rt->mail, user.id, message_id, &msg, &attachments) != 0) {
         respond_with_error(res, 404, "not_found", "Message not found");
         return;
     }
-    json_writer_t jw = {0};
+    json_writer_t jw{};
     jw_append(&jw, "{\"message\":");
     json_write_message(&jw, &msg);
     jw_append(&jw, ",\"attachments\":");
@@ -918,8 +922,8 @@ static int copy_string_checked(const char *json, const jsmntok_t *tok, char *out
     return 0;
 }
 
-static void handle_message_compose(server_runtime_t *rt, http_request_t *req, http_response_t *res) {
-    user_record_t user = {0};
+static void handle_message_compose(ServerRuntime *rt, http_request_t *req, http_response_t *res) {
+    user_record_t user{};
     char token[128];
     if (ensure_authenticated(rt, req, res, &user, token, sizeof(token)) != 0) {
         return;
@@ -943,9 +947,9 @@ static void handle_message_compose(server_runtime_t *rt, http_request_t *req, ht
     int save_draft = 0;
     int is_starred = 0;
     int is_archived = 0;
-    compose_request_t compose = {0};
+    compose_request_t compose{};
     uint64_t draft_id = 0;
-    json_writer_t jw = {0};
+    json_writer_t jw{};
 
     int subject_idx = json_find_field(req->body, tokens, tok_count, "subject");
     if (subject_idx >= 0 && tokens[subject_idx].type == JSMN_STRING) {
@@ -1041,7 +1045,7 @@ static void handle_message_compose(server_runtime_t *rt, http_request_t *req, ht
                             respond_with_error(res, 400, "bad_request", "Invalid attachment data length");
                             goto compose_cleanup;
                         }
-                        char *data = malloc((size_t)len + 1);
+                        char *data = static_cast<char*>(std::malloc((size_t)len + 1));
                         if (!data) {
                             respond_with_error(res, 500, "oom", "Out of memory");
                             goto compose_cleanup;
@@ -1090,8 +1094,8 @@ compose_cleanup:
     free(tokens);
 }
 
-static void handle_message_star(server_runtime_t *rt, http_request_t *req, http_response_t *res, uint64_t message_id) {
-    user_record_t user = {0};
+static void handle_message_star(ServerRuntime *rt, http_request_t *req, http_response_t *res, uint64_t message_id) {
+    user_record_t user{};
     char token[128];
     if (ensure_authenticated(rt, req, res, &user, token, sizeof(token)) != 0) {
         return;
@@ -1118,7 +1122,7 @@ static void handle_message_star(server_runtime_t *rt, http_request_t *req, http_
         respond_with_error(res, 404, "not_found", "Message not found");
         return;
     }
-    json_writer_t jw = {0};
+    json_writer_t jw{};
     jw_append(&jw, "{\"success\":true,\"starred\":");
     jw_append(&jw, starred ? "true" : "false");
     jw_append_char(&jw, '}');
@@ -1126,8 +1130,8 @@ static void handle_message_star(server_runtime_t *rt, http_request_t *req, http_
     free(tokens);
 }
 
-static void handle_message_archive(server_runtime_t *rt, http_request_t *req, http_response_t *res, uint64_t message_id) {
-    user_record_t user = {0};
+static void handle_message_archive(ServerRuntime *rt, http_request_t *req, http_response_t *res, uint64_t message_id) {
+    user_record_t user{};
     char token[128];
     if (ensure_authenticated(rt, req, res, &user, token, sizeof(token)) != 0) {
         return;
@@ -1160,7 +1164,7 @@ static void handle_message_archive(server_runtime_t *rt, http_request_t *req, ht
         respond_with_error(res, 404, "not_found", "Message not found");
         return;
     }
-    json_writer_t jw = {0};
+    json_writer_t jw{};
     jw_append(&jw, "{\"success\":true,\"archived\":");
     jw_append(&jw, archived ? "true" : "false");
     jw_append(&jw, ",\"archiveGroup\":");
@@ -1170,8 +1174,8 @@ static void handle_message_archive(server_runtime_t *rt, http_request_t *req, ht
     free(tokens);
 }
 
-static void handle_create_folder(server_runtime_t *rt, http_request_t *req, http_response_t *res) {
-    user_record_t user = {0};
+static void handle_create_folder(ServerRuntime *rt, http_request_t *req, http_response_t *res) {
+    user_record_t user{};
     char token[128];
     if (ensure_authenticated(rt, req, res, &user, token, sizeof(token)) != 0) {
         return;
@@ -1207,13 +1211,13 @@ static void handle_create_folder(server_runtime_t *rt, http_request_t *req, http
         }
     }
 
-    folder_record_t folder = {0};
+    folder_record_t folder{};
     if (mail_service_create_folder(rt->mail, user.id, name, kind, &folder) != 0) {
         free(tokens);
         respond_with_error(res, 500, "db_error", "Failed to create folder");
         return;
     }
-    json_writer_t jw = {0};
+    json_writer_t jw{};
     jw_append(&jw, "{\"folder\":");
     json_write_folder(&jw, &folder);
     jw_append_char(&jw, '}');
@@ -1221,18 +1225,18 @@ static void handle_create_folder(server_runtime_t *rt, http_request_t *req, http
     free(tokens);
 }
 
-static void handle_contacts_list(server_runtime_t *rt, http_request_t *req, http_response_t *res) {
-    user_record_t user = {0};
+static void handle_contacts_list(ServerRuntime *rt, http_request_t *req, http_response_t *res) {
+    user_record_t user{};
     char token[128];
     if (ensure_authenticated(rt, req, res, &user, token, sizeof(token)) != 0) {
         return;
     }
-    contact_list_t contacts = {0};
+    contact_list_t contacts{};
     if (mail_service_list_contacts(rt->mail, user.id, &contacts) != 0) {
         respond_with_error(res, 500, "db_error", "Failed to load contacts");
         return;
     }
-    json_writer_t jw = {0};
+    json_writer_t jw{};
     jw_append(&jw, "{\"contacts\":");
     json_write_contact_list(&jw, &contacts);
     jw_append_char(&jw, '}');
@@ -1240,8 +1244,8 @@ static void handle_contacts_list(server_runtime_t *rt, http_request_t *req, http
     contact_list_free(&contacts);
 }
 
-static void handle_contacts_add(server_runtime_t *rt, http_request_t *req, http_response_t *res) {
-    user_record_t user = {0};
+static void handle_contacts_add(ServerRuntime *rt, http_request_t *req, http_response_t *res) {
+    user_record_t user{};
     char token[128];
     if (ensure_authenticated(rt, req, res, &user, token, sizeof(token)) != 0) {
         return;
@@ -1283,7 +1287,7 @@ static void handle_contacts_add(server_runtime_t *rt, http_request_t *req, http_
         }
         char username[USERNAME_MAX];
         json_copy_string(req->body, &tokens[username_idx], username, sizeof(username));
-        user_record_t contact_user = {0};
+    user_record_t contact_user{};
         if (db_get_user_by_username(rt->db, username, &contact_user) != 0) {
             free(tokens);
             respond_with_error(res, 404, "not_found", "Contact user not found");
@@ -1297,14 +1301,14 @@ static void handle_contacts_add(server_runtime_t *rt, http_request_t *req, http_
     if (alias_buf[0] == '\0') {
         strncpy(alias_buf, "Friend", sizeof(alias_buf) - 1);
     }
-    contact_record_t contact = {0};
+    contact_record_t contact{};
     const char *group_name = group_buf[0] ? group_buf : NULL;
     if (mail_service_add_contact(rt->mail, user.id, alias_buf, group_name, contact_id, &contact) != 0) {
         free(tokens);
         respond_with_error(res, 500, "db_error", "Failed to add contact");
         return;
     }
-    json_writer_t jw = {0};
+    json_writer_t jw{};
     jw_append(&jw, "{\"contact\":");
     json_write_contact(&jw, &contact);
     jw_append_char(&jw, '}');
@@ -1312,7 +1316,7 @@ static void handle_contacts_add(server_runtime_t *rt, http_request_t *req, http_
     free(tokens);
 }
 
-static void handle_api(server_runtime_t *rt, http_request_t *req, http_response_t *res, const char *path, const char *query) {
+static void handle_api(ServerRuntime *rt, http_request_t *req, http_response_t *res, const char *path, const char *query) {
     if (strcmp(path, "/api/register") == 0) {
         if (req->method != HTTP_POST) {
             respond_with_error(res, 405, "method_not_allowed", "Use POST");
@@ -1440,13 +1444,13 @@ static void handle_api(server_runtime_t *rt, http_request_t *req, http_response_
     respond_with_error(res, 404, "not_found", "Unknown API endpoint");
 }
 
-void router_init(server_runtime_t *rt) {
+void router_init(ServerRuntime *rt) {
     (void)rt;
 }
 
-void router_dispose(void) {}
+void router_dispose() {}
 
-int router_handle_request(server_runtime_t *rt, http_request_t *req, router_result_t *out) {
+int router_handle_request(ServerRuntime *rt, http_request_t *req, RouterResult *out) {
     http_response_init(&out->response);
     const char *conn = http_header_get(req, "Connection");
     if (conn && strcasecmp(conn, "close") == 0) {
@@ -1510,4 +1514,6 @@ int router_handle_request(server_runtime_t *rt, http_request_t *req, router_resu
     respond_with_error(&out->response, 404, "not_found", "Resource not found");
     return 0;
 }
+
+} // namespace mail
 

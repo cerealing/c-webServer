@@ -11,7 +11,7 @@
 #include <time.h>
 
 struct db_handle {
-    server_config config;
+    mail::ServerConfig config;
     MYSQL **pool;
     unsigned char *busy;
     size_t pool_size;
@@ -49,7 +49,7 @@ static void release_conn(db_handle_t *db, MYSQL *conn) {
 
 static unsigned long escape_dup(MYSQL *conn, const char *src, char **out) {
     size_t len = src ? strlen(src) : 0;
-    *out = malloc(len * 2 + 1);
+    *out = static_cast<char *>(malloc(len * 2 + 1));
     if (!*out) return 0;
     if (!src) {
         (*out)[0] = '\0';
@@ -147,19 +147,19 @@ static int ensure_default_folders(db_handle_t *db, MYSQL *conn, uint64_t user_id
     return 0;
 }
 
-int db_init(const server_config *cfg, db_handle_t **out) {
-    if (!cfg || !out) return -1;
+int db_init(const mail::ServerConfig &cfg, db_handle_t **out) {
+    if (!out) return -1;
     if (mysql_library_init(0, NULL, NULL) != 0) {
         LOGF("mysql: library init failed");
         return -1;
     }
 
-    db_handle_t *db = calloc(1, sizeof(*db));
+    db_handle_t *db = static_cast<db_handle_t *>(calloc(1, sizeof(*db)));
     if (!db) return -1;
-    db->config = *cfg;
-    db->pool_size = cfg->mysql.pool_size > 0 ? (size_t)cfg->mysql.pool_size : 4;
-    db->pool = calloc(db->pool_size, sizeof(MYSQL *));
-    db->busy = calloc(db->pool_size, 1);
+    db->config = cfg;
+    db->pool_size = cfg.mysql.pool_size > 0 ? static_cast<size_t>(cfg.mysql.pool_size) : 4;
+    db->pool = static_cast<MYSQL **>(calloc(db->pool_size, sizeof(MYSQL *)));
+    db->busy = static_cast<unsigned char *>(calloc(db->pool_size, 1));
     if (!db->pool || !db->busy) {
         free(db->pool);
         free(db->busy);
@@ -178,12 +178,12 @@ int db_init(const server_config *cfg, db_handle_t **out) {
             return -1;
         }
         mysql_options(conn, MYSQL_SET_CHARSET_NAME, "utf8mb4");
-        if (!mysql_real_connect(conn,
-                                cfg->mysql.host,
-                                cfg->mysql.user,
-                                cfg->mysql.password,
-                                cfg->mysql.database,
-                                cfg->mysql.port,
+    if (!mysql_real_connect(conn,
+                cfg.mysql.host.c_str(),
+                cfg.mysql.user.c_str(),
+                cfg.mysql.password.c_str(),
+                cfg.mysql.database.c_str(),
+                cfg.mysql.port,
                                 NULL,
                                 CLIENT_MULTI_STATEMENTS)) {
             LOGF("mysql: connect failed: %s", mysql_error(conn));
@@ -447,7 +447,7 @@ int db_list_folders(db_handle_t *db, uint64_t user_id, folder_list_t *out) {
     if (mysql_query(conn, query) == 0) {
         MYSQL_RES *res = mysql_store_result(conn);
         size_t rows = mysql_num_rows(res);
-        out->items = calloc(rows, sizeof(folder_record_t));
+    out->items = static_cast<folder_record_t *>(calloc(rows, sizeof(folder_record_t)));
         out->count = rows;
         size_t idx = 0;
         MYSQL_ROW row;
@@ -514,7 +514,7 @@ static int list_messages_internal(db_handle_t *db, MYSQL *conn, uint64_t user_id
     }
     MYSQL_RES *res = mysql_store_result(conn);
     size_t rows = mysql_num_rows(res);
-    out->items = calloc(rows, sizeof(message_record_t));
+    out->items = static_cast<message_record_t *>(calloc(rows, sizeof(message_record_t)));
     out->count = rows;
     size_t idx = 0;
     MYSQL_ROW row;
@@ -573,7 +573,7 @@ int db_get_message(db_handle_t *db, uint64_t user_id, uint64_t message_id, messa
             if (mysql_query(conn, query) == 0) {
                 MYSQL_RES *ares = mysql_store_result(conn);
                 size_t rows = mysql_num_rows(ares);
-                attachments->items = calloc(rows, sizeof(attachment_record_t));
+                attachments->items = static_cast<attachment_record_t *>(calloc(rows, sizeof(attachment_record_t)));
                 attachments->count = rows;
                 size_t idx = 0;
                 MYSQL_ROW arow;
@@ -716,7 +716,6 @@ int db_save_draft(db_handle_t *db, uint64_t user_id, message_record_t *msg, atta
 int db_send_message(db_handle_t *db, uint64_t user_id, const message_record_t *msg, const attachment_list_t *attachments) {
     MYSQL *conn = acquire_conn(db);
     if (!conn) return -1;
-    int rc = -1;
     if (mysql_query(conn, "START TRANSACTION") != 0) {
         LOGE("mysql: could not start transaction: %s", mysql_error(conn));
         release_conn(db, conn);
@@ -732,46 +731,50 @@ int db_send_message(db_handle_t *db, uint64_t user_id, const message_record_t *m
     base.custom_folder[0] = '\0';
     base.archive_group[0] = '\0';
 
+    bool failed = false;
     if (insert_message_with_attachments(conn, user_id, &base, attachments, NULL) != 0) {
-        goto rollback;
+        failed = true;
     }
 
     char recipients_copy[RECIPIENT_MAX];
-    strncpy(recipients_copy, msg->recipients, sizeof(recipients_copy) - 1);
-    recipients_copy[sizeof(recipients_copy) - 1] = '\0';
-    char *saveptr = NULL;
-    char *token = strtok_r(recipients_copy, ",", &saveptr);
-    while (token) {
-        while (*token == ' ') token++;
-        if (*token) {
-            uint64_t rid = 0;
-            if (username_to_user_id(db, conn, token, &rid) == 0) {
-                ensure_default_folders(db, conn, rid);
-                message_record_t copy = base;
-                copy.owner_id = rid;
-                copy.folder = FOLDER_INBOX;
-                copy.is_starred = 0;
-                copy.archive_group[0] = '\0';
-                copy.is_archived = 0;
-                copy.is_draft = 0;
-                copy.custom_folder[0] = '\0';
-                if (insert_message_with_attachments(conn, rid, &copy, attachments, NULL) != 0) {
-                    goto rollback;
+    if (!failed) {
+        strncpy(recipients_copy, msg->recipients, sizeof(recipients_copy) - 1);
+        recipients_copy[sizeof(recipients_copy) - 1] = '\0';
+        char *saveptr = NULL;
+        char *token = strtok_r(recipients_copy, ",", &saveptr);
+        while (token && !failed) {
+            while (*token == ' ') token++;
+            if (*token) {
+                uint64_t rid = 0;
+                if (username_to_user_id(db, conn, token, &rid) == 0) {
+                    ensure_default_folders(db, conn, rid);
+                    message_record_t copy = base;
+                    copy.owner_id = rid;
+                    copy.folder = FOLDER_INBOX;
+                    copy.is_starred = 0;
+                    copy.archive_group[0] = '\0';
+                    copy.is_archived = 0;
+                    copy.is_draft = 0;
+                    copy.custom_folder[0] = '\0';
+                    if (insert_message_with_attachments(conn, rid, &copy, attachments, NULL) != 0) {
+                        failed = true;
+                        break;
+                    }
                 }
             }
+            token = strtok_r(NULL, ",", &saveptr);
         }
-        token = strtok_r(NULL, ",", &saveptr);
+    }
+
+    if (failed) {
+        mysql_query(conn, "ROLLBACK");
+        release_conn(db, conn);
+        return -1;
     }
 
     mysql_query(conn, "COMMIT");
-    rc = 0;
     release_conn(db, conn);
-    return rc;
-
-rollback:
-    mysql_query(conn, "ROLLBACK");
-    release_conn(db, conn);
-    return -1;
+    return 0;
 }
 
 int db_star_message(db_handle_t *db, uint64_t user_id, uint64_t message_id, int starred) {
@@ -831,7 +834,7 @@ int db_list_contacts(db_handle_t *db, uint64_t user_id, contact_list_t *out) {
     if (mysql_query(conn, query) == 0) {
         MYSQL_RES *res = mysql_store_result(conn);
         size_t rows = mysql_num_rows(res);
-        out->items = calloc(rows, sizeof(contact_record_t));
+    out->items = static_cast<contact_record_t *>(calloc(rows, sizeof(contact_record_t)));
         out->count = rows;
         size_t idx = 0;
         MYSQL_ROW row;

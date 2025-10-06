@@ -2,142 +2,147 @@
 #include "jsmn.h"
 #include "logger.h"
 
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
+#include <charconv>
+#include <fstream>
+#include <iterator>
+#include <string_view>
+#include <system_error>
+#include <vector>
 
-static int parse_string(const char *json, const jsmntok_t *tok, char *out, size_t out_sz) {
-    int len = tok->end - tok->start;
-    if (len >= (int)out_sz) len = (int)out_sz - 1;
-    memcpy(out, json + tok->start, len);
-    out[len] = '\0';
-    return 0;
+namespace mail {
+
+namespace {
+
+std::string_view token_view(const std::string &json, const jsmntok_t &tok) {
+    return std::string_view(json).substr(static_cast<std::size_t>(tok.start),
+                                         static_cast<std::size_t>(tok.end - tok.start));
 }
 
-static int token_streq(const char *json, const jsmntok_t *tok, const char *s) {
-    int len = tok->end - tok->start;
-    return ((int)strlen(s) == len) && strncmp(json + tok->start, s, len) == 0;
+template <typename T>
+T parse_number(std::string_view view, T fallback) {
+    T value = fallback;
+    if (!view.empty()) {
+        const char *begin = view.data();
+        const char *end = view.data() + view.size();
+        auto [ptr, ec] = std::from_chars(begin, end, value);
+        if (ec != std::errc{} || ptr != end) {
+            return fallback;
+        }
+    }
+    return value;
 }
 
-void config_set_defaults(server_config *cfg) {
-    memset(cfg, 0, sizeof(*cfg));
-    strcpy(cfg->listen_address, "0.0.0.0");
-    cfg->port = 8085;
-    cfg->max_connections = 64;
-    cfg->thread_pool_size = 8;
-    strcpy(cfg->static_dir, "static");
-    strcpy(cfg->template_dir, "templates");
-    strcpy(cfg->data_dir, "data");
-    strcpy(cfg->log_path, "-");
-    cfg->backend = DB_BACKEND_STUB;
-    strcpy(cfg->mysql.host, "127.0.0.1");
-    cfg->mysql.port = 3306;
-    strcpy(cfg->mysql.user, "root");
-    strcpy(cfg->mysql.password, "123456789");
-    strcpy(cfg->mysql.database, "mail_app");
-    cfg->mysql.pool_size = 10;
-    strcpy(cfg->session_secret, "change-me");
+std::string to_string(std::string_view view) {
+    return std::string(view.data(), view.size());
 }
 
-int config_load(const char *path, server_config *cfg) {
-    config_set_defaults(cfg);
+} // namespace
 
-    FILE *fp = fopen(path, "rb");
-    if (!fp) {
-        LOGW("config: could not open %s, using defaults", path);
-        return -1;
-    }
-    if (fseek(fp, 0, SEEK_END) != 0) {
-        fclose(fp);
-        return -1;
-    }
-    long sz = ftell(fp);
-    if (sz < 0) {
-        fclose(fp);
-        return -1;
-    }
-    if (fseek(fp, 0, SEEK_SET) != 0) {
-        fclose(fp);
-        return -1;
-    }
-    char *json = static_cast<char*>(std::malloc((size_t)sz + 1));
-    if (!json) {
-        fclose(fp);
-        return -1;
-    }
-    size_t read = fread(json, 1, (size_t)sz, fp);
-    if (read != (size_t)sz) {
-    std::free(json);
-        fclose(fp);
-        return -1;
-    }
-    json[sz] = '\0';
-    fclose(fp);
+std::string ServerConfig::log_target() const {
+    return log_path ? log_path->string() : std::string("-");
+}
 
-    jsmn_parser parser;
-    jsmn_init(&parser);
-    int token_count = 256;
-    jsmntok_t *tokens = static_cast<jsmntok_t*>(std::calloc(token_count, sizeof(jsmntok_t)));
-    if (!tokens) {
-    std::free(json);
-        return -1;
-    }
-    int r = jsmn_parse(&parser, json, (unsigned int)sz, tokens, token_count);
-    if (r < 0) {
-    std::free(tokens);
-    std::free(json);
-        return -1;
+bool load_config(const std::filesystem::path &path, ServerConfig &cfg) {
+    cfg = ServerConfig{};
+
+    std::ifstream in(path, std::ios::binary);
+    if (!in.is_open()) {
+        LOGW("config: could not open %s, using defaults", path.string().c_str());
+        return false;
     }
 
-    for (int i = 1; i < r; ++i) {
-        jsmntok_t *t = &tokens[i];
-        if (t->type != JSMN_STRING) continue;
-        if (token_streq(json, t, "listen_address")) {
-            parse_string(json, &tokens[++i], cfg->listen_address, sizeof(cfg->listen_address));
-        } else if (token_streq(json, t, "port")) {
-            cfg->port = atoi(json + tokens[++i].start);
-        } else if (token_streq(json, t, "max_connections")) {
-            cfg->max_connections = atoi(json + tokens[++i].start);
-        } else if (token_streq(json, t, "thread_pool_size")) {
-            cfg->thread_pool_size = atoi(json + tokens[++i].start);
-        } else if (token_streq(json, t, "static_dir")) {
-            parse_string(json, &tokens[++i], cfg->static_dir, sizeof(cfg->static_dir));
-        } else if (token_streq(json, t, "template_dir")) {
-            parse_string(json, &tokens[++i], cfg->template_dir, sizeof(cfg->template_dir));
-        } else if (token_streq(json, t, "data_dir")) {
-            parse_string(json, &tokens[++i], cfg->data_dir, sizeof(cfg->data_dir));
-        } else if (token_streq(json, t, "log_path")) {
-            parse_string(json, &tokens[++i], cfg->log_path, sizeof(cfg->log_path));
-        } else if (token_streq(json, t, "db_backend")) {
-            char val[32];
-            parse_string(json, &tokens[++i], val, sizeof(val));
-            if (strcmp(val, "mysql") == 0) cfg->backend = DB_BACKEND_MYSQL;
-            else cfg->backend = DB_BACKEND_STUB;
-        } else if (token_streq(json, t, "session_secret")) {
-            parse_string(json, &tokens[++i], cfg->session_secret, sizeof(cfg->session_secret));
-        } else if (token_streq(json, t, "mysql")) {
-            int obj_size = tokens[i+1].size;
-            int limit = i + 1 + obj_size * 2;
-            for (int j = i + 1; j <= limit && j < r; j += 2) {
-                if (tokens[j].type != JSMN_STRING) continue;
-                if (token_streq(json, &tokens[j], "host")) {
-                    parse_string(json, &tokens[j+1], cfg->mysql.host, sizeof(cfg->mysql.host));
-                } else if (token_streq(json, &tokens[j], "port")) {
-                    cfg->mysql.port = atoi(json + tokens[j+1].start);
-                } else if (token_streq(json, &tokens[j], "user")) {
-                    parse_string(json, &tokens[j+1], cfg->mysql.user, sizeof(cfg->mysql.user));
-                } else if (token_streq(json, &tokens[j], "password")) {
-                    parse_string(json, &tokens[j+1], cfg->mysql.password, sizeof(cfg->mysql.password));
-                } else if (token_streq(json, &tokens[j], "database")) {
-                    parse_string(json, &tokens[j+1], cfg->mysql.database, sizeof(cfg->mysql.database));
-                } else if (token_streq(json, &tokens[j], "pool_size")) {
-                    cfg->mysql.pool_size = atoi(json + tokens[j+1].start);
+    std::string json((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    if (json.empty()) {
+        return true;
+    }
+
+    std::vector<jsmntok_t> tokens(256);
+    int token_count = -1;
+
+    for (int attempt = 0; attempt < 5; ++attempt) {
+        jsmn_parser parser;
+        jsmn_init(&parser);
+        token_count = jsmn_parse(&parser, json.c_str(), static_cast<unsigned int>(json.size()), tokens.data(), static_cast<unsigned int>(tokens.size()));
+        if (token_count >= 0) {
+            break;
+        }
+        tokens.resize(tokens.size() * 2);
+    }
+
+    if (token_count < 0) {
+        LOGW("config: failed to parse %s, using defaults", path.string().c_str());
+        return false;
+    }
+
+    for (int i = 1; i < token_count; ++i) {
+        const jsmntok_t &key_tok = tokens[i];
+        if (key_tok.type != JSMN_STRING) {
+            continue;
+        }
+
+        std::string_view key = token_view(json, key_tok);
+
+        if (key == "listen_address") {
+            cfg.listen_address = to_string(token_view(json, tokens[++i]));
+        } else if (key == "port") {
+            cfg.port = static_cast<std::uint16_t>(parse_number(token_view(json, tokens[++i]), cfg.port));
+        } else if (key == "max_connections") {
+            cfg.max_connections = static_cast<std::size_t>(parse_number(token_view(json, tokens[++i]), cfg.max_connections));
+        } else if (key == "thread_pool_size") {
+            cfg.thread_pool_size = static_cast<std::size_t>(parse_number(token_view(json, tokens[++i]), cfg.thread_pool_size));
+        } else if (key == "static_dir") {
+            cfg.static_dir = std::filesystem::path(to_string(token_view(json, tokens[++i])));
+        } else if (key == "template_dir") {
+            cfg.template_dir = std::filesystem::path(to_string(token_view(json, tokens[++i])));
+        } else if (key == "data_dir") {
+            cfg.data_dir = std::filesystem::path(to_string(token_view(json, tokens[++i])));
+        } else if (key == "log_path") {
+            std::string value = to_string(token_view(json, tokens[++i]));
+            if (value.empty() || value == "-") {
+                cfg.log_path.reset();
+            } else {
+                cfg.log_path = std::filesystem::path(value);
+            }
+        } else if (key == "db_backend") {
+            std::string value = to_string(token_view(json, tokens[++i]));
+            cfg.backend = (value == "mysql") ? DbBackend::MySql : DbBackend::Stub;
+        } else if (key == "session_secret") {
+            cfg.session_secret = to_string(token_view(json, tokens[++i]));
+        } else if (key == "mysql") {
+            const int obj_index = ++i;
+            const jsmntok_t &obj_tok = tokens[obj_index];
+            int limit = obj_index + obj_tok.size * 2;
+            for (int j = obj_index + 1; j <= limit && j + 1 < token_count; j += 2) {
+                const jsmntok_t &mk = tokens[j];
+                const jsmntok_t &mv = tokens[j + 1];
+                if (mk.type != JSMN_STRING) {
+                    continue;
+                }
+                std::string_view mysql_key = token_view(json, mk);
+                std::string_view mysql_val = token_view(json, mv);
+
+                if (mysql_key == "host") {
+                    cfg.mysql.host = to_string(mysql_val);
+                } else if (mysql_key == "port") {
+                    cfg.mysql.port = static_cast<std::uint16_t>(parse_number(mysql_val, cfg.mysql.port));
+                } else if (mysql_key == "user") {
+                    cfg.mysql.user = to_string(mysql_val);
+                } else if (mysql_key == "password") {
+                    cfg.mysql.password = to_string(mysql_val);
+                } else if (mysql_key == "database") {
+                    cfg.mysql.database = to_string(mysql_val);
+                } else if (mysql_key == "pool_size") {
+                    cfg.mysql.pool_size = static_cast<std::size_t>(parse_number(mysql_val, cfg.mysql.pool_size));
                 }
             }
+            i = limit;
+        } else {
+            // Skip the corresponding value token
+            ++i;
         }
     }
 
-    std::free(tokens);
-    std::free(json);
-    return 0;
+    return true;
 }
+
+} // namespace mail

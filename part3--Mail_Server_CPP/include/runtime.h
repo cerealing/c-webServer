@@ -8,32 +8,39 @@
 #include "http.h"
 #include "db.h"
 
-#include <sys/epoll.h>
+#include <cstddef>
 
-typedef struct response_job {
-    int fd;
-    http_response_t response;
-} response_job_t;
+struct auth_context;
+struct mail_service;
+struct template_engine;
 
-typedef struct connection_table connection_table_t;
+namespace mail {
 
-typedef struct auth_context auth_context_t;
-typedef struct mail_service mail_service_t;
-typedef struct template_engine template_engine_t;
+class ConnectionTable;
 
-typedef struct server_runtime {
-    server_config config;
-    int listen_fd;
-    int epoll_fd;
-    int event_fd;
-    thread_pool_t *pool;
-    concurrent_queue_t response_queue;
-    max_heap_t connection_heap;
-    connection_table_t *connections;
-    db_handle_t *db;
-    auth_context_t *auth;
-    mail_service_t *mail;
-    template_engine_t *templates;
-} server_runtime_t;
+struct ResponseJob {
+    int fd{-1};
+    http_response_t response{};
+};
+
+struct ServerRuntime {
+    ServerConfig config{};
+    int listen_fd{-1};
+    int epoll_fd{-1};
+    int event_fd{-1};
+    thread_pool_t *pool{nullptr};
+    concurrent_queue_t response_queue{};
+    max_heap_t connection_heap{};
+    ConnectionTable *connections{nullptr};
+    db_handle_t *db{nullptr};
+    auth_context *auth{nullptr};
+    mail_service *mail{nullptr};
+    template_engine *templates{nullptr};
+};
+
+} // namespace mail
+
+using response_job_t = mail::ResponseJob;
+using server_runtime_t = mail::ServerRuntime;
 
 #endif // RUNTIME_H

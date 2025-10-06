@@ -109,7 +109,7 @@ int template_engine_render(template_engine_t *engine, const char *name,
         return -1;
     }
 
-    str_builder_t sb = {0};
+    str_builder_t sb{};
     sb_ensure(&sb, raw_len + 1);
 
     for (size_t i = 0; i < raw_len;) {

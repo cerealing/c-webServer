@@ -3,6 +3,10 @@
 
 #include "runtime.h"
 
-int server_run(server_runtime_t *rt);
+namespace mail {
+
+int server_run(ServerRuntime *rt);
+
+} // namespace mail
 
 #endif // SERVER_H

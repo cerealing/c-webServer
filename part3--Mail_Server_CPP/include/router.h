@@ -3,14 +3,20 @@
 
 #include "http.h"
 
-typedef struct server_runtime server_runtime_t;
+namespace mail {
 
-typedef struct {
-    http_response_t response;
-} router_result_t;
+struct ServerRuntime;
 
-void router_init(server_runtime_t *rt);
-void router_dispose(void);
-int router_handle_request(server_runtime_t *rt, http_request_t *req, router_result_t *out);
+struct RouterResult {
+    http_response_t response{};
+};
+
+void router_init(ServerRuntime *rt);
+void router_dispose();
+int router_handle_request(ServerRuntime *rt, http_request_t *req, RouterResult *out);
+
+} // namespace mail
+
+using router_result_t = mail::RouterResult;
 
 #endif // ROUTER_H

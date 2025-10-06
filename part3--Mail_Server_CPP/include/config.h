@@ -1,37 +1,46 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-#include <stddef.h>
+#include <cstdint>
+#include <filesystem>
+#include <optional>
+#include <string>
 
-typedef enum {
-    DB_BACKEND_STUB,
-    DB_BACKEND_MYSQL
-} db_backend_kind;
+namespace mail {
 
-typedef struct {
-    char listen_address[64];
-    int port;
-    int max_connections;
-    int thread_pool_size;
-    char static_dir[256];
-    char template_dir[256];
-    char data_dir[256];
-    char log_path[256];
-    db_backend_kind backend;
+enum class DbBackend {
+    Stub,
+    MySql
+};
 
-    struct {
-        char host[128];
-        int port;
-        char user[64];
-        char password[128];
-        char database[64];
-        int pool_size;
-    } mysql;
+struct MysqlConfig {
+    std::string host{"127.0.0.1"};
+    std::uint16_t port{3306};
+    std::string user{"root"};
+    std::string password{"123456789"};
+    std::string database{"mail_app"};
+    std::size_t pool_size{10};
+};
 
-    char session_secret[128];
-} server_config;
+struct ServerConfig {
+    std::string listen_address{"0.0.0.0"};
+    std::uint16_t port{8085};
+    std::size_t max_connections{64};
+    std::size_t thread_pool_size{8};
+    std::filesystem::path static_dir{"static"};
+    std::filesystem::path template_dir{"templates"};
+    std::filesystem::path data_dir{"data"};
+    std::optional<std::filesystem::path> log_path{}; // std::nullopt -> stderr
+    DbBackend backend{DbBackend::Stub};
+    MysqlConfig mysql{};
+    std::string session_secret{"change-me"};
 
-int config_load(const char *path, server_config *cfg);
-void config_set_defaults(server_config *cfg);
+    bool log_to_stderr() const noexcept { return !log_path.has_value(); }
+    std::string log_target() const;
+};
+
+bool load_config(const std::filesystem::path &path, ServerConfig &cfg);
+
+} // namespace mail
 
 #endif // CONFIG_H

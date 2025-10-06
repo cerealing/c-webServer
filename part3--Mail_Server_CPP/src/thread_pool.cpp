@@ -67,7 +67,7 @@ static void *worker_main(void *arg) {
             break;
         }
 
-        tp_job_t job = {0};
+    tp_job_t job{};
         if (job_queue_pop(&pool->queue, &job) != 0) {
             pthread_mutex_unlock(&pool->mutex);
             continue;

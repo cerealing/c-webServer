@@ -62,7 +62,7 @@ static inline void contact_list_free(contact_list_t *list) {
     list->count = 0;
 }
 
-int db_init(const server_config *cfg, db_handle_t **out);
+int db_init(const mail::ServerConfig &cfg, db_handle_t **out);
 void db_close(db_handle_t *db);
 
 int db_authenticate(db_handle_t *db, const char *username, const char *password, user_record_t *out_user);

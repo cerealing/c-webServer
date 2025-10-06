@@ -25,7 +25,7 @@ typedef struct {
     size_t attachment_count;
 } compose_request_t;
 
-mail_service_t *mail_service_create(db_handle_t *db, const server_config *cfg);
+mail_service_t *mail_service_create(db_handle_t *db, const mail::ServerConfig &cfg);
 void mail_service_destroy(mail_service_t *svc);
 
 int mail_service_list_mailboxes(mail_service_t *svc, uint64_t user_id, folder_list_t *out);

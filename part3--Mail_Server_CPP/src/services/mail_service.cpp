@@ -2,25 +2,40 @@
 #include "logger.h"
 #include "util.h"
 
-#include <stdlib.h>
-#include <string.h>
-#include <sys/stat.h>
-#include <unistd.h>
-#include <stdio.h>
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <memory>
+#include <optional>
+#include <sstream>
+#include <string>
+#include <system_error>
 
 struct mail_service {
     db_handle_t *db;
-    char upload_root[512];
+    std::filesystem::path upload_root;
 };
 
-static int ensure_directory(const char *path) {
-    struct stat st;
-    if (stat(path, &st) == 0) {
-        if (S_ISDIR(st.st_mode)) return 0;
-        return -1;
+namespace {
+
+bool ensure_directory(const std::filesystem::path &path) {
+    std::error_code ec;
+    if (std::filesystem::exists(path, ec)) {
+        return std::filesystem::is_directory(path, ec);
     }
-    return mkdir(path, 0755);
+    std::filesystem::create_directories(path, ec);
+    return !ec;
 }
+
+std::filesystem::path resolve_data_root(const mail::ServerConfig &cfg) {
+    if (cfg.data_dir.empty()) {
+        return std::filesystem::path{"data"};
+    }
+    return cfg.data_dir;
+}
+
+} // namespace
 
 static unsigned char base64_decode_table[256];
 static int base64_table_ready = 0;
@@ -46,7 +61,7 @@ static int base64_decode(const char *input, unsigned char **out_buf, size_t *out
         if (input[len-2] == '=') pad++;
     }
     size_t decoded_len = (len / 4) * 3 - pad;
-    unsigned char *buf = malloc(decoded_len + 1);
+    unsigned char *buf = static_cast<unsigned char*>(std::malloc(decoded_len + 1));
     if (!buf) return -1;
 
     size_t o = 0;
@@ -56,7 +71,7 @@ static int base64_decode(const char *input, unsigned char **out_buf, size_t *out
         unsigned char c2 = base64_decode_table[(unsigned char)input[i+2]];
         unsigned char c3 = base64_decode_table[(unsigned char)input[i+3]];
         if (c0 & 0x80 || c1 & 0x80 || c2 & 0x80 || c3 & 0x80) {
-            free(buf);
+                std::free(buf);
             return -1;
         }
         buf[o++] = (unsigned char)((c0 << 2) | (c1 >> 4));
@@ -72,19 +87,32 @@ static int base64_decode(const char *input, unsigned char **out_buf, size_t *out
     return 0;
 }
 
-mail_service_t *mail_service_create(db_handle_t *db, const server_config *cfg) {
-    mail_service_t *svc = calloc(1, sizeof(*svc));
-    if (!svc) return NULL;
+mail_service_t *mail_service_create(db_handle_t *db, const mail::ServerConfig &cfg) {
+    if (!db) {
+        return nullptr;
+    }
+
+    auto svc = std::unique_ptr<mail_service>(new mail_service{});
     svc->db = db;
-    snprintf(svc->upload_root, sizeof(svc->upload_root), "%s/uploads", cfg->data_dir[0] ? cfg->data_dir : "data");
-    ensure_directory(cfg->data_dir[0] ? cfg->data_dir : "data");
-    ensure_directory(svc->upload_root);
-    return svc;
+
+    const auto data_root = resolve_data_root(cfg);
+    if (!ensure_directory(data_root)) {
+        LOGE("Failed to prepare data directory %s", data_root.string().c_str());
+        return nullptr;
+    }
+
+    svc->upload_root = data_root / "uploads";
+    if (!ensure_directory(svc->upload_root)) {
+        LOGE("Failed to prepare upload directory %s", svc->upload_root.string().c_str());
+        return nullptr;
+    }
+
+    return svc.release();
 }
 
 void mail_service_destroy(mail_service_t *svc) {
     if (!svc) return;
-    free(svc);
+    delete svc;
 }
 
 int mail_service_list_mailboxes(mail_service_t *svc, uint64_t user_id, folder_list_t *out) {
@@ -99,17 +127,13 @@ int mail_service_get_message(mail_service_t *svc, uint64_t user_id, uint64_t mes
     return db_get_message(svc->db, user_id, message_id, msg, attachments);
 }
 
-static int ensure_user_upload_dir(mail_service_t *svc, uint64_t user_id, char *out_path, size_t out_len) {
-    int written = snprintf(out_path, out_len, "%s/%llu", svc->upload_root, (unsigned long long)user_id);
-    if (written < 0 || (size_t)written >= out_len) {
-        LOGE("Upload path too long for user %llu", (unsigned long long)user_id);
-        return -1;
+static std::optional<std::filesystem::path> ensure_user_upload_dir(mail_service_t *svc, uint64_t user_id) {
+    std::filesystem::path path = svc->upload_root / std::to_string(user_id);
+    if (!ensure_directory(path)) {
+        LOGE("Failed to ensure upload directory %s", path.string().c_str());
+        return std::nullopt;
     }
-    if (ensure_directory(out_path) != 0) {
-        LOGE("Failed to ensure upload directory %s", out_path);
-        return -1;
-    }
-    return 0;
+    return path;
 }
 
 static int store_attachment(mail_service_t *svc, uint64_t user_id, const attachment_payload_t *payload,
@@ -130,46 +154,43 @@ static int store_attachment(mail_service_t *svc, uint64_t user_id, const attachm
     if (base64_decode(encoded, &binary, &binary_len) != 0) {
         return -1;
     }
-    char user_dir[512];
-    if (ensure_user_upload_dir(svc, user_id, user_dir, sizeof(user_dir)) != 0) {
-        free(binary);
+    auto user_dir = ensure_user_upload_dir(svc, user_id);
+    if (!user_dir) {
+        std::free(binary);
         return -1;
     }
-    char filename[ATTACHMENT_NAME_MAX];
-    int n = snprintf(filename, sizeof(filename), "%llu-%llu-%s",
-                     (unsigned long long)util_now_ms(),
-                     (unsigned long long)util_rand64(),
-                     payload->filename);
-    if (n < 0 || (size_t)n >= sizeof(filename)) {
-        free(binary);
+
+    std::ostringstream name_stream;
+    name_stream << util_now_ms() << '-' << util_rand64() << '-';
+    if (payload->filename[0] != '\0') {
+        name_stream << payload->filename;
+    } else {
+        name_stream << "attachment";
+    }
+    std::string filename = name_stream.str();
+    std::filesystem::path fullpath = *user_dir / filename;
+
+    std::ofstream out(fullpath, std::ios::binary);
+    if (!out.is_open()) {
+        std::free(binary);
         return -1;
     }
-    char fullpath[ATTACHMENT_PATH_MAX];
-    n = snprintf(fullpath, sizeof(fullpath), "%s/%s", user_dir, filename);
-    if (n < 0 || (size_t)n >= sizeof(fullpath)) {
-        free(binary);
+    out.write(reinterpret_cast<const char *>(binary), static_cast<std::streamsize>(binary_len));
+    out.close();
+    if (!out) {
+        std::free(binary);
         return -1;
     }
-    FILE *fp = fopen(fullpath, "wb");
-    if (!fp) {
-        free(binary);
-        return -1;
-    }
-    if (fwrite(binary, 1, binary_len, fp) != binary_len) {
-        fclose(fp);
-        free(binary);
-        return -1;
-    }
-    fclose(fp);
-    free(binary);
+    std::free(binary);
 
     memset(out_rec, 0, sizeof(*out_rec));
     util_strlcpy(out_rec->filename, sizeof(out_rec->filename), payload->filename);
-    util_strlcpy(out_rec->storage_path, sizeof(out_rec->storage_path), fullpath);
+    const std::string storage_path = fullpath.string();
+    util_strlcpy(out_rec->storage_path, sizeof(out_rec->storage_path), storage_path.c_str());
     util_strlcpy(out_rec->mime_type, sizeof(out_rec->mime_type), payload->mime_type);
     util_strlcpy(out_rec->relative_path, sizeof(out_rec->relative_path), payload->relative_path);
     if (out_rec->relative_path[0] == '\0') {
-        util_strlcpy(out_rec->relative_path, sizeof(out_rec->relative_path), payload->filename);
+        util_strlcpy(out_rec->relative_path, sizeof(out_rec->relative_path), filename.c_str());
     }
     out_rec->size_bytes = binary_len;
     return 0;
@@ -192,9 +213,9 @@ int mail_service_compose(mail_service_t *svc, uint64_t user_id, const compose_re
         util_strlcpy(msg.custom_folder, sizeof(msg.custom_folder), compose->custom_folder);
     }
 
-    attachment_list_t attachments = {0};
+    attachment_list_t attachments{};
     if (compose->attachment_count > 0) {
-        attachments.items = calloc(compose->attachment_count, sizeof(attachment_record_t));
+    attachments.items = static_cast<attachment_record_t*>(std::calloc(compose->attachment_count, sizeof(attachment_record_t)));
         attachments.count = compose->attachment_count;
         for (size_t i = 0; i < compose->attachment_count; ++i) {
             if (store_attachment(svc, user_id, &compose->attachments[i], &attachments.items[i]) != 0) {

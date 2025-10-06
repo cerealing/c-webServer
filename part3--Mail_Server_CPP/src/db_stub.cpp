@@ -5,6 +5,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <cstdio>
 #include <pthread.h>
 #include <errno.h>
 #include <time.h>
@@ -42,7 +43,7 @@ typedef struct {
 
 struct db_handle {
     pthread_mutex_t mutex;
-    server_config config;
+    mail::ServerConfig config;
 
     user_vec_t users;
     folder_vec_t folders;
@@ -89,7 +90,7 @@ static void stub_seed_users(db_handle_t *db) {
 
     time_t now = time(NULL);
     for (size_t i = 0; i < count; ++i) {
-        user_record_t rec = {0};
+    user_record_t rec{};
         rec.id = ++db->next_user_id;
         strncpy(rec.username, seeds[i].username, sizeof(rec.username) - 1);
         strncpy(rec.email, seeds[i].email, sizeof(rec.email) - 1);
@@ -117,28 +118,34 @@ static void stub_ensure_default_folders(db_handle_t *db, uint64_t user_id) {
         if (!exists) {
             ensure_capacity((void **)&db->folders.data, &db->folders.capacity,
                             sizeof(folder_record_t), db->folders.size + 1);
-            folder_record_t rec = {
-                .id = ++db->next_folder_id,
-                .owner_id = user_id,
-                .kind = defaults[i],
-                .created_at = time(NULL)
-            };
+            folder_record_t rec{};
+            rec.id = ++db->next_folder_id;
+            rec.owner_id = user_id;
+            rec.kind = defaults[i];
+            rec.created_at = time(NULL);
             strncpy(rec.name, names[i], sizeof(rec.name)-1);
             db->folders.data[db->folders.size++] = rec;
         }
     }
 }
 
-int db_init(const server_config *cfg, db_handle_t **out) {
+int db_init(const mail::ServerConfig &cfg, db_handle_t **out) {
     db_handle_t *db = static_cast<db_handle_t*>(std::calloc(1, sizeof(*db)));
     if (!db) return -1;
+    std::fprintf(stderr, "[maild] db_init: allocated handle\n");
     pthread_mutex_init(&db->mutex, NULL);
-    if (cfg) db->config = *cfg;
+    std::fprintf(stderr, "[maild] db_init: mutex initialized\n");
+    std::fprintf(stderr, "[maild] db_init: (skipping config copy for debug)\n");
+    // db->config = cfg;
+    LOGI("stub db: begin seeding");
     stub_seed_users(db);
+    LOGI("stub db: users=%zu", db->users.size);
     for (size_t i = 0; i < db->users.size; ++i) {
         stub_ensure_default_folders(db, db->users.data[i].id);
     }
+    LOGI("stub db: folders=%zu", db->folders.size);
     stub_seed_messages_and_contacts(db);
+    LOGI("stub db: messages=%zu contacts=%zu", db->messages.size, db->contacts.size);
     *out = db;
     return 0;
 }
@@ -214,7 +221,7 @@ int db_create_user(db_handle_t *db, const char *username, const char *email, con
         pthread_mutex_unlock(&db->mutex);
         return -1;
     }
-    user_record_t rec = {0};
+    user_record_t rec{};
     rec.id = ++db->next_user_id;
     strncpy(rec.username, username, sizeof(rec.username) - 1);
     strncpy(rec.email, email, sizeof(rec.email) - 1);
@@ -250,12 +257,11 @@ int db_create_folder(db_handle_t *db, uint64_t user_id, const char *name, folder
     pthread_mutex_lock(&db->mutex);
     ensure_capacity((void **)&db->folders.data, &db->folders.capacity,
                     sizeof(folder_record_t), db->folders.size + 1);
-    folder_record_t rec = {
-        .id = ++db->next_folder_id,
-        .owner_id = user_id,
-        .kind = kind,
-        .created_at = time(NULL)
-    };
+    folder_record_t rec{};
+    rec.id = ++db->next_folder_id;
+    rec.owner_id = user_id;
+    rec.kind = kind;
+    rec.created_at = time(NULL);
     strncpy(rec.name, name, sizeof(rec.name)-1);
     db->folders.data[db->folders.size++] = rec;
     if (out_folder) *out_folder = rec;
@@ -389,14 +395,14 @@ static void stub_add_contact(db_handle_t *db, uint64_t user_id, uint64_t contact
     if (!user_id || !contact_user_id) return;
     ensure_capacity((void **)&db->contacts.data, &db->contacts.capacity,
                     sizeof(contact_record_t), db->contacts.size + 1);
-    contact_record_t rec = {0};
+    contact_record_t rec{};
     rec.id = ++db->next_contact_id;
     rec.user_id = user_id;
     rec.contact_user_id = contact_user_id;
     if (alias && *alias) {
         util_strlcpy(rec.alias, sizeof(rec.alias), alias);
     } else {
-        user_record_t contact_user = {0};
+    user_record_t contact_user{};
         if (db_get_user_by_id(db, contact_user_id, &contact_user) == 0) {
             util_strlcpy(rec.alias, sizeof(rec.alias), contact_user.username);
         }
@@ -416,7 +422,7 @@ static void stub_seed_messages_and_contacts(db_handle_t *db) {
     uint64_t eve = find_user_id_by_username(db, "eve");
 
     if (alice && bob) {
-        message_record_t kickoff = {0};
+    message_record_t kickoff{};
         strncpy(kickoff.subject, "Project Kickoff", sizeof(kickoff.subject) - 1);
         strncpy(kickoff.body,
                 "Team,\n\nWelcome to the Project Atlas kickoff. Please review the brief before tomorrow's sync.\n\n- Alice",
@@ -424,7 +430,7 @@ static void stub_seed_messages_and_contacts(db_handle_t *db) {
         strncpy(kickoff.recipients, "bob,carol", sizeof(kickoff.recipients) - 1);
         db_send_message(db, alice, &kickoff, NULL);
 
-        message_record_t notes = {0};
+    message_record_t notes{};
         strncpy(notes.subject, "Atlas daily notes", sizeof(notes.subject) - 1);
         strncpy(notes.body,
                 "Stand-up summary:\n- Backend API contract finalized\n- UI polishing still pending\n\nCheers, Alice",
@@ -434,7 +440,7 @@ static void stub_seed_messages_and_contacts(db_handle_t *db) {
     }
 
     if (bob && alice) {
-        message_record_t reply = {0};
+    message_record_t reply{};
         strncpy(reply.subject, "Re: Project Kickoff", sizeof(reply.subject) - 1);
         strncpy(reply.body,
                 "Thanks Alice, attaching the revised timeline. Let's sync at 10am.\n\n- Bob",
@@ -444,7 +450,7 @@ static void stub_seed_messages_and_contacts(db_handle_t *db) {
     }
 
     if (carol && alice) {
-        message_record_t ux = {0};
+    message_record_t ux{};
         strncpy(ux.subject, "UX Review Checklist", sizeof(ux.subject) - 1);
         strncpy(ux.body,
                 "Hi Alice,\n\nHere is the UX review checklist for sprint 5. Please share feedback by EOD.\n\nThanks, Carol",
@@ -454,7 +460,7 @@ static void stub_seed_messages_and_contacts(db_handle_t *db) {
     }
 
     if (dave && eve) {
-        message_record_t ops = {0};
+    message_record_t ops{};
         strncpy(ops.subject, "Ops Handoff", sizeof(ops.subject) - 1);
         strncpy(ops.body,
                 "Eve,\n\nServers patched and dashboards updated. Let me know if you see any anomalies.\n\n- Dave",
@@ -464,7 +470,7 @@ static void stub_seed_messages_and_contacts(db_handle_t *db) {
     }
 
     if (carol) {
-        message_record_t draft = {0};
+    message_record_t draft{};
         strncpy(draft.subject, "Content ideas", sizeof(draft.subject) - 1);
         strncpy(draft.body,
                 "Drafting newsletter topics: AI digest, release notes, customer spotlight.",
@@ -474,11 +480,11 @@ static void stub_seed_messages_and_contacts(db_handle_t *db) {
     }
 
     if (alice) {
-        folder_record_t custom = {0};
+    folder_record_t custom{};
         db_create_folder(db, alice, "Product", FOLDER_CUSTOM, &custom);
         ensure_capacity((void **)&db->messages.data, &db->messages.capacity,
                         sizeof(message_record_t), db->messages.size + 1);
-        message_record_t bulletin = {0};
+    message_record_t bulletin{};
         bulletin.id = ++db->next_message_id;
         bulletin.owner_id = alice;
         bulletin.folder = FOLDER_CUSTOM;
@@ -601,12 +607,11 @@ int db_add_contact(db_handle_t *db, uint64_t user_id, const char *alias, const c
     pthread_mutex_lock(&db->mutex);
     ensure_capacity((void **)&db->contacts.data, &db->contacts.capacity,
                     sizeof(contact_record_t), db->contacts.size + 1);
-    contact_record_t rec = {
-        .id = ++db->next_contact_id,
-        .user_id = user_id,
-        .contact_user_id = contact_user_id,
-        .created_at = time(NULL)
-    };
+    contact_record_t rec{};
+    rec.id = ++db->next_contact_id;
+    rec.user_id = user_id;
+    rec.contact_user_id = contact_user_id;
+    rec.created_at = time(NULL);
     util_strlcpy(rec.alias, sizeof(rec.alias), alias);
     if (group_name) {
         util_strlcpy(rec.group_name, sizeof(rec.group_name), group_name);

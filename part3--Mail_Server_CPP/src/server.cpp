@@ -9,6 +9,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <errno.h>
+#include <memory>
+#include <vector>
 #include <unistd.h>
 #include <stdint.h>
 #include <arpa/inet.h>
@@ -19,66 +21,89 @@
 
 #define MAX_EVENTS 128
 
-typedef struct connection_table {
-    connection_t **slots;
-    size_t capacity;
-    size_t count;
-} connection_table_t;
+namespace mail {
 
-static int connection_table_init(connection_table_t *table, size_t capacity) {
-    table->slots = static_cast<connection_t**>(std::calloc(capacity, sizeof(connection_t *)));
-    if (!table->slots) return -1;
-    table->capacity = capacity;
-    table->count = 0;
-    return 0;
-}
-
-static void connection_table_free(connection_table_t *table) {
-    if (!table) return;
-    for (size_t i = 0; i < table->capacity; ++i) {
-        if (table->slots[i]) {
-            connection_free(table->slots[i]);
-            std::free(table->slots[i]);
+struct ConnectionDeleter {
+    void operator()(connection_t *conn) const noexcept {
+        if (conn) {
+            connection_free(conn);
+            delete conn;
         }
     }
-    std::free(table->slots);
-    table->slots = NULL;
-    table->capacity = table->count = 0;
-}
+};
 
-static connection_t *connection_table_get(connection_table_t *table, int fd) {
-    if ((size_t)fd >= table->capacity) return NULL;
-    return table->slots[fd];
-}
+using ConnectionHandle = std::unique_ptr<connection_t, ConnectionDeleter>;
 
-static int connection_table_put(connection_table_t *table, connection_t *conn) {
-    if ((size_t)conn->fd >= table->capacity) {
-        size_t new_cap = table->capacity;
-        while ((size_t)conn->fd >= new_cap) {
+class ConnectionTable {
+public:
+    explicit ConnectionTable(std::size_t initial_capacity)
+        : slots_(initial_capacity), count_(0) {}
+
+    connection_t *get(int fd) noexcept {
+        if (fd < 0) return nullptr;
+        const auto idx = static_cast<std::size_t>(fd);
+        if (idx >= slots_.size()) return nullptr;
+        return slots_[idx].get();
+    }
+
+    void insert(ConnectionHandle conn) {
+        const auto fd = static_cast<std::size_t>(conn->fd);
+        ensure_capacity(fd + 1);
+        if (!slots_[fd]) {
+            ++count_;
+        }
+        slots_[fd] = std::move(conn);
+    }
+
+    void erase(int fd) noexcept {
+        if (fd < 0) return;
+        const auto idx = static_cast<std::size_t>(fd);
+        if (idx >= slots_.size()) return;
+        if (slots_[idx]) {
+            slots_[idx].reset();
+            if (count_ > 0) {
+                --count_;
+            }
+        }
+    }
+
+    std::size_t size() const noexcept { return count_; }
+
+    void clear() noexcept {
+        for (auto &slot : slots_) {
+            slot.reset();
+        }
+        count_ = 0;
+    }
+
+private:
+    void ensure_capacity(std::size_t desired) {
+        if (desired <= slots_.size()) {
+            return;
+        }
+        std::size_t new_cap = slots_.empty() ? 1024 : slots_.size();
+        while (new_cap < desired) {
             new_cap *= 2;
         }
-    connection_t **new_slots = static_cast<connection_t**>(std::realloc(table->slots, new_cap * sizeof(connection_t *)));
-        if (!new_slots) return -1;
-        memset(new_slots + table->capacity, 0, (new_cap - table->capacity) * sizeof(connection_t *));
-        table->slots = new_slots;
-        table->capacity = new_cap;
+        slots_.resize(new_cap);
     }
-    if (!table->slots[conn->fd]) table->count++;
-    table->slots[conn->fd] = conn;
-    return 0;
+
+    std::vector<ConnectionHandle> slots_;
+    std::size_t count_;
+};
+
+inline ConnectionHandle make_connection(int fd) {
+    auto conn = ConnectionHandle{new connection_t{}, ConnectionDeleter{}};
+    connection_init(conn.get(), fd);
+    return conn;
 }
 
-static void connection_table_remove(connection_table_t *table, int fd) {
-    if ((size_t)fd >= table->capacity) return;
-    if (table->slots[fd]) {
-        connection_free(table->slots[fd]);
-    std::free(table->slots[fd]);
-        table->slots[fd] = NULL;
-        if (table->count > 0) table->count--;
-    }
-}
+} // namespace mail
 
-static int setup_listen_socket(const server_config *cfg) {
+namespace mail {
+namespace {
+
+int setup_listen_socket(const ServerConfig &cfg) {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) return -1;
 
@@ -89,14 +114,14 @@ static int setup_listen_socket(const server_config *cfg) {
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
-    addr.sin_port = htons(cfg->port);
-    addr.sin_addr.s_addr = inet_addr(cfg->listen_address);
+    addr.sin_port = htons(cfg.port);
+    addr.sin_addr.s_addr = inet_addr(cfg.listen_address.c_str());
 
     if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         close(fd);
         return -1;
     }
-    if (listen(fd, cfg->max_connections) < 0) {
+    if (listen(fd, static_cast<int>(cfg.max_connections)) < 0) {
         close(fd);
         return -1;
     }
@@ -105,21 +130,20 @@ static int setup_listen_socket(const server_config *cfg) {
     return fd;
 }
 
-static void notify_main(server_runtime_t *rt) {
+void notify_main(ServerRuntime *rt) {
     uint64_t one = 1;
     ssize_t written = write(rt->event_fd, &one, sizeof(one));
     (void)written;
 }
 
-static void handle_worker_response(server_runtime_t *rt, connection_table_t *table) {
+void handle_worker_response(ServerRuntime *rt, ConnectionTable &table) {
     uint64_t val;
     while (read(rt->event_fd, &val, sizeof(val)) > 0) {}
 
-    worker_response_t *resp;
-    while ((resp = (worker_response_t *)cq_pop(&rt->response_queue)) != NULL) {
-        connection_t *conn = connection_table_get(table, resp->fd);
+    while (auto *raw = static_cast<worker_response_t *>(cq_pop(&rt->response_queue))) {
+        std::unique_ptr<worker_response_t> resp(raw);
+        connection_t *conn = table.get(resp->fd);
         if (!conn) {
-            worker_response_free(resp);
             continue;
         }
         connection_prepare_response(conn, &resp->response);
@@ -128,56 +152,56 @@ static void handle_worker_response(server_runtime_t *rt, connection_table_t *tab
         ev.data.fd = conn->fd;
         epoll_ctl(rt->epoll_fd, EPOLL_CTL_MOD, conn->fd, &ev);
         conn->state = CONN_STATE_WRITING;
-        worker_response_free(resp);
         heap_remove_fd(&rt->connection_heap, conn->fd);
-        heap_push(&rt->connection_heap, (heap_node_t){ .key_fd = conn->fd, .priority = -conn->last_activity_ms });
+        heap_push(&rt->connection_heap, heap_node_t{ .key_fd = conn->fd, .priority = -conn->last_activity_ms });
     }
 }
 
-static void worker_entry(void *arg) {
-    worker_task_t *task = (worker_task_t *)arg;
-    server_runtime_t *rt = task->runtime;
-    router_result_t out;
+void worker_entry(void *arg) {
+    std::unique_ptr<worker_task_t> task(static_cast<worker_task_t *>(arg));
+    ServerRuntime *rt = task->runtime;
+    RouterResult out;
     http_response_init(&out.response);
 
     router_handle_request(rt, &task->request, &out);
 
-    worker_response_t *resp = static_cast<worker_response_t*>(std::calloc(1, sizeof(*resp)));
+    auto resp = std::make_unique<worker_response_t>();
     resp->fd = task->fd;
     resp->response = out.response;
     out.response.body = NULL;
 
-    cq_push(&rt->response_queue, resp);
+    cq_push(&rt->response_queue, resp.release());
     notify_main(rt);
-
-    http_request_free(&task->request);
-    std::free(task);
 }
 
-static void dispatch_to_pool(server_runtime_t *rt, worker_task_t *task) {
+bool dispatch_to_pool(ServerRuntime *rt, std::unique_ptr<worker_task_t> task) {
     tp_job_t job = {
         .fn = worker_entry,
-        .arg = task
+        .arg = task.get()
     };
     if (thread_pool_submit(rt->pool, job) != 0) {
         LOGE("thread pool full");
-        worker_task_free(task);
+        return false;
     }
+    task.release();
+    return true;
 }
 
-static void process_request(server_runtime_t *rt, connection_table_t *table, connection_t *conn) {
-    worker_task_t *task = static_cast<worker_task_t*>(std::calloc(1, sizeof(*task)));
+void process_request(ServerRuntime *rt, connection_t *conn) {
+    auto task = std::make_unique<worker_task_t>();
     task->runtime = rt;
     task->fd = conn->fd;
     task->request = conn->parser.request;
     conn->parser.request.body = NULL; // transferred
     http_parser_reset(&conn->parser);
     conn->state = CONN_STATE_PROCESSING;
-    dispatch_to_pool(rt, task);
+    if (!dispatch_to_pool(rt, std::move(task))) {
+        conn->state = CONN_STATE_READING;
+    }
 }
 
-static void accept_new_connections(server_runtime_t *rt, connection_table_t *table) {
-    while (1) {
+void accept_new_connections(ServerRuntime *rt, ConnectionTable &table) {
+    while (true) {
         struct sockaddr_in addr;
         socklen_t len = sizeof(addr);
         int client_fd = accept(rt->listen_fd, (struct sockaddr *)&addr, &len);
@@ -188,17 +212,21 @@ static void accept_new_connections(server_runtime_t *rt, connection_table_t *tab
         }
         util_set_nonblocking(client_fd);
         util_set_cloexec(client_fd);
-    connection_t *conn = static_cast<connection_t*>(std::calloc(1, sizeof(*conn)));
-        connection_init(conn, client_fd);
-        connection_table_put(table, conn);
-        heap_push(&rt->connection_heap, (heap_node_t){ .key_fd = conn->fd, .priority = -conn->last_activity_ms });
 
-        if (table->count > (size_t)rt->config.max_connections) {
+        auto conn_handle = make_connection(client_fd);
+        connection_t *conn = conn_handle.get();
+        table.insert(std::move(conn_handle));
+        heap_push(&rt->connection_heap, heap_node_t{ .key_fd = conn->fd, .priority = -conn->last_activity_ms });
+
+        if (table.size() > rt->config.max_connections) {
             heap_node_t victim;
             if (heap_pop(&rt->connection_heap, &victim) == 0) {
                 if (victim.key_fd != conn->fd) {
-                    connection_table_remove(table, victim.key_fd);
-                    epoll_ctl(rt->epoll_fd, EPOLL_CTL_DEL, victim.key_fd, NULL);
+                    connection_t *drop = table.get(victim.key_fd);
+                    if (drop) {
+                        epoll_ctl(rt->epoll_fd, EPOLL_CTL_DEL, victim.key_fd, NULL);
+                        table.erase(victim.key_fd);
+                    }
                 }
             }
         }
@@ -210,9 +238,9 @@ static void accept_new_connections(server_runtime_t *rt, connection_table_t *tab
     }
 }
 
-static void handle_connection_event(server_runtime_t *rt, connection_table_t *table, struct epoll_event *ev) {
+void handle_connection_event(ServerRuntime *rt, ConnectionTable &table, struct epoll_event *ev) {
     int fd = ev->data.fd;
-    connection_t *conn = connection_table_get(table, fd);
+    connection_t *conn = table.get(fd);
     if (!conn) {
         epoll_ctl(rt->epoll_fd, EPOLL_CTL_DEL, fd, NULL);
         close(fd);
@@ -221,25 +249,25 @@ static void handle_connection_event(server_runtime_t *rt, connection_table_t *ta
 
     if (ev->events & (EPOLLHUP | EPOLLERR)) {
         heap_remove_fd(&rt->connection_heap, fd);
-        connection_table_remove(table, fd);
         epoll_ctl(rt->epoll_fd, EPOLL_CTL_DEL, fd, NULL);
+        table.erase(fd);
         return;
     }
 
     if (conn->state == CONN_STATE_READING && (ev->events & EPOLLIN)) {
         if (connection_handle_read(conn) < 0) {
             heap_remove_fd(&rt->connection_heap, fd);
-            connection_table_remove(table, fd);
             epoll_ctl(rt->epoll_fd, EPOLL_CTL_DEL, fd, NULL);
+            table.erase(fd);
             return;
         }
         heap_remove_fd(&rt->connection_heap, fd);
-        heap_push(&rt->connection_heap, (heap_node_t){ .key_fd = fd, .priority = -conn->last_activity_ms });
+        heap_push(&rt->connection_heap, heap_node_t{ .key_fd = fd, .priority = -conn->last_activity_ms });
         parse_result_t res;
         do {
             res = http_parser_execute(&conn->parser, &conn->read_buf);
             if (res == PARSE_COMPLETE) {
-                process_request(rt, table, conn);
+                process_request(rt, conn);
                 break;
             }
             if (res == PARSE_ERROR) {
@@ -263,8 +291,8 @@ static void handle_connection_event(server_runtime_t *rt, connection_table_t *ta
     if (conn->state == CONN_STATE_WRITING && (ev->events & EPOLLOUT)) {
         if (connection_handle_write(conn) < 0 || conn->state == CONN_STATE_CLOSING) {
             heap_remove_fd(&rt->connection_heap, fd);
-            connection_table_remove(table, fd);
             epoll_ctl(rt->epoll_fd, EPOLL_CTL_DEL, fd, NULL);
+            table.erase(fd);
             return;
         }
         if (conn->state == CONN_STATE_READING) {
@@ -276,14 +304,15 @@ static void handle_connection_event(server_runtime_t *rt, connection_table_t *ta
     }
 }
 
-int server_run(server_runtime_t *rt) {
-    connection_table_t table;
-    connection_table_init(&table, 1024);
+} // namespace
+
+int server_run(ServerRuntime *rt) {
+    ConnectionTable table{1024};
     rt->connections = &table;
 
-    rt->listen_fd = setup_listen_socket(&rt->config);
+    rt->listen_fd = setup_listen_socket(rt->config);
     if (rt->listen_fd < 0) {
-        LOGF("failed to bind %s:%d", rt->config.listen_address, rt->config.port);
+        LOGF("failed to bind %s:%d", rt->config.listen_address.c_str(), rt->config.port);
         return -1;
     }
 
@@ -310,7 +339,7 @@ int server_run(server_runtime_t *rt) {
 
     struct epoll_event events[MAX_EVENTS];
 
-    LOGI("server listening on %s:%d", rt->config.listen_address, rt->config.port);
+    LOGI("server listening on %s:%d", rt->config.listen_address.c_str(), rt->config.port);
 
     while (1) {
         int n = epoll_wait(rt->epoll_fd, events, MAX_EVENTS, -1);
@@ -320,16 +349,19 @@ int server_run(server_runtime_t *rt) {
         }
         for (int i = 0; i < n; ++i) {
             if (events[i].data.fd == rt->listen_fd) {
-                accept_new_connections(rt, &table);
+                accept_new_connections(rt, table);
             } else if (events[i].data.fd == rt->event_fd) {
-                handle_worker_response(rt, &table);
+                handle_worker_response(rt, table);
             } else {
-                handle_connection_event(rt, &table, &events[i]);
+                handle_connection_event(rt, table, &events[i]);
             }
         }
     }
 
     router_dispose();
-    connection_table_free(&table);
+    table.clear();
+    rt->connections = nullptr;
     return 0;
 }
+
+} // namespace mail

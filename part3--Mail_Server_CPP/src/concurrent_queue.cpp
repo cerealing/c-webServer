@@ -25,7 +25,7 @@ void cq_destroy(concurrent_queue_t *q, void (*free_fn)(void *)) {
 }
 
 void cq_push(concurrent_queue_t *q, void *data) {
-    auto *node = static_cast<cq_node_t*>(std::malloc(sizeof(*node)));
+    auto *node = static_cast<cq_node_t*>(std::malloc(sizeof(cq_node_t)));
     node->data = data;
     node->next = NULL;
     pthread_mutex_lock(&q->mutex);

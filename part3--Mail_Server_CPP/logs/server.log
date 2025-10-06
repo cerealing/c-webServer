@@ -1,0 +1,35 @@
+2025-10-06 15:51:59 [INFO] logger initialized (target=logs/server.log)
+2025-10-06 15:51:59 [INFO] thread pool ready with 8 threads
+2025-10-06 15:51:59 [INFO] response queue initialized
+2025-10-06 15:53:24 [INFO] logger initialized (target=logs/server.log)
+2025-10-06 15:53:24 [INFO] thread pool ready with 8 threads
+2025-10-06 15:53:24 [INFO] response queue initialized
+2025-10-06 15:54:48 [INFO] logger initialized (target=logs/server.log)
+2025-10-06 15:54:48 [INFO] thread pool ready with 8 threads
+2025-10-06 15:54:48 [INFO] response queue initialized
+2025-10-06 15:57:01 [INFO] logger initialized (target=logs/server.log)
+2025-10-06 15:57:01 [INFO] thread pool ready with 8 threads
+2025-10-06 15:57:01 [INFO] response queue initialized
+2025-10-06 15:58:33 [INFO] logger initialized (target=logs/server.log)
+2025-10-06 15:58:33 [INFO] thread pool ready with 8 threads
+2025-10-06 15:58:33 [INFO] response queue initialized
+2025-10-06 15:59:25 [INFO] logger initialized (target=logs/server.log)
+2025-10-06 15:59:25 [INFO] thread pool ready with 8 threads
+2025-10-06 15:59:25 [INFO] response queue initialized
+2025-10-06 15:59:53 [INFO] logger initialized (target=logs/server.log)
+2025-10-06 15:59:53 [INFO] thread pool ready with 8 threads
+2025-10-06 15:59:53 [INFO] response queue initialized
+2025-10-06 16:00:35 [INFO] logger initialized (target=logs/server.log)
+2025-10-06 16:00:35 [INFO] thread pool ready with 8 threads
+2025-10-06 16:00:35 [INFO] response queue initialized
+2025-10-06 16:01:49 [INFO] logger initialized (target=logs/server.log)
+2025-10-06 16:01:49 [INFO] thread pool ready with 8 threads
+2025-10-06 16:01:49 [INFO] response queue initialized
+2025-10-06 16:01:49 [INFO] stub db: begin seeding
+2025-10-06 16:01:49 [INFO] stub db: users=5
+2025-10-06 16:01:49 [INFO] stub db: folders=25
+2025-10-06 16:01:49 [INFO] stub db: messages=16 contacts=5
+2025-10-06 16:01:49 [INFO] database backend ready
+2025-10-06 16:01:49 [INFO] auth/mail/template services initialized
+2025-10-06 16:01:49 [INFO] signal handlers registered
+2025-10-06 16:01:49 [INFO] server listening on 0.0.0.0:8085

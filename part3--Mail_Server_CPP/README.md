@@ -75,6 +75,9 @@ make USE_REAL_MYSQL=1
 #### Database bootstrap
 
 1. Start a MySQL instance and create a schema named `mail_app` (or adjust `config/dev_mysql.json`).
+	```bash
+	cd part3--Mail_Server/sql
+	```
 2. Load the schema:
 
 	```bash
