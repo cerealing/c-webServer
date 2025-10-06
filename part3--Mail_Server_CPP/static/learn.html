@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>MailCenter 学习页面</title>
+    <style>
+        :root {
+            color-scheme: light;
+        }
+        * {
+            box-sizing: border-box;
+        }
+        body {
+            margin: 0;
+            font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+            background: radial-gradient(circle at top, #f2f6ff 0%, #e6ecff 40%, #f8f9fb 100%);
+            color: #1f2933;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+        }
+        main {
+            width: min(840px, 100%);
+            background: white;
+            border-radius: 18px;
+            box-shadow: 0 24px 70px rgba(15, 35, 95, 0.12);
+            padding: 48px clamp(24px, 6vw, 72px);
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 32px;
+        }
+        h1 {
+            margin: 0 0 16px;
+            font-size: clamp(28px, 4vw, 40px);
+            line-height: 1.2;
+        }
+        p {
+            margin: 0 0 16px;
+            line-height: 1.7;
+            font-size: 16px;
+        }
+        ul {
+            margin: 0 0 24px 20px;
+            padding: 0;
+            line-height: 1.7;
+        }
+        .cta {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px 24px;
+            border-radius: 999px;
+            background: #155eef;
+            color: white;
+            text-decoration: none;
+            font-weight: 600;
+            box-shadow: 0 8px 20px rgba(21, 94, 239, 0.2);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+        .cta:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 16px 30px rgba(21, 94, 239, 0.25);
+        }
+        figure {
+            margin: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        figure img {
+            width: min(320px, 100%);
+            border-radius: 16px;
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.08);
+        }
+        footer {
+            margin-top: 24px;
+            font-size: 14px;
+            color: #62748c;
+        }
+    </style>
+</head>
+<body>
+    <main>
+        <section>
+            <h1>欢迎来到 MailCenter 静态学习页</h1>
+            <p>这是服务器上的静态托管示例，展示如何在主域名路径下直接提供 HTML、图片等资源。页面内容来源于最初的 <code>learn.html</code>，并做了小幅美化。</p>
+            <p>想体验邮件系统？点击下方按钮跳转到 <strong>/mail</strong> 完成登录。</p>
+            <a class="cta" href="/mail">前往邮件登录</a>
+            <footer>静态资源路径示例：<code>/learn.html</code>、<code>/im.png</code>、<code>/static/css/main.css</code></footer>
+        </section>
+        <figure>
+            <img src="/static/im.png" alt="学习示例图片">
+        </figure>
+    </main>
+</body>
+</html>

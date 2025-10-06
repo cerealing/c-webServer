@@ -1,0 +1,19 @@
+{
+  "listen_address": "0.0.0.0",
+  "port": 8085,
+  "max_connections": 64,
+  "thread_pool_size": 8,
+  "static_dir": "static",
+  "template_dir": "templates",
+  "db_backend": "mysql",
+  "mysql": {
+    "host": "127.0.0.1",
+    "port": 3306,
+    "user": "root",
+    "password": "123456789",
+    "database": "mail_app",
+    "pool_size": 10
+  },
+  "session_secret": "replace-with-strong-secret",
+  "log_path": "logs/server.log"
+}

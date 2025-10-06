@@ -15,3 +15,5 @@ After finishing this part, you will have a website like [learn](http://cerealing
 ## Part 2: Epoll Server
 
 ## Part 3: An Email Server Using MySQL
+
+Looking for a modernized toolchain? Check out `part3--Mail_Server_CPP/` for the C++20 port of the same mail server, built with the identical feature set but compiled via `g++`.

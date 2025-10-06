@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{title}}</title>
+    <link rel="stylesheet" href="/static/css/main.css">
+</head>
+<body class="app-page">
+    <header class="topbar">
+        <div class="brand">
+            <span class="logo-dot"></span>
+            <span>MailCenter 邮件中心</span>
+        </div>
+        <div class="session">
+            <span id="user-email" class="session-user"></span>
+            <button id="logout-button" class="ghost">退出</button>
+        </div>
+    </header>
+    <div class="app-shell">
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <button id="compose-button" class="primary full">写邮件</button>
+                <button id="contacts-button" class="ghost full">联系人管理</button>
+            </div>
+            <nav>
+                <ul id="folder-list" class="folder-list"></ul>
+            </nav>
+        </aside>
+        <main class="workspace">
+            <section class="message-panel">
+                <div class="panel-header">
+                    <h2 id="current-folder-name">收件箱</h2>
+                    <div class="panel-actions">
+                        <button id="refresh-button" class="ghost small">刷新</button>
+                    </div>
+                </div>
+                <ul id="message-list" class="message-list" aria-live="polite"></ul>
+            </section>
+            <section class="reader-panel" id="reader-panel">
+                <div class="panel-header">
+                    <h2 id="detail-subject">请选择邮件</h2>
+                    <div class="panel-actions">
+                        <button id="star-toggle" class="ghost small" disabled>标星</button>
+                        <button id="archive-toggle" class="ghost small" disabled>归档</button>
+                    </div>
+                </div>
+                <div class="reader-meta">
+                    <span id="detail-recipients"></span>
+                    <span id="detail-date"></span>
+                    <span id="detail-archive-group" class="archive-chip"></span>
+                </div>
+                <article id="detail-body" class="reader-body"></article>
+                <div id="attachment-list" class="attachment-list"></div>
+            </section>
+        </main>
+    </div>
+
+    <div id="compose-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="compose-title">
+        <div class="modal-backdrop" id="compose-backdrop"></div>
+        <div class="modal-dialog">
+            <form id="compose-form" class="modal-content">
+                <div class="modal-header">
+                    <h2 id="compose-title">撰写邮件</h2>
+                    <button type="button" id="compose-close" class="ghost icon" aria-label="关闭">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <label class="field">
+                        <span>收件人</span>
+                        <input type="text" name="recipients" placeholder="alice, bob" required>
+                    </label>
+                    <label class="field">
+                        <span>主题</span>
+                        <input type="text" name="subject" placeholder="邮件主题">
+                    </label>
+                    <label class="field">
+                        <span>正文</span>
+                        <textarea name="body" rows="8" placeholder="请输入邮件内容…"></textarea>
+                    </label>
+                    <label class="field">
+                        <span>归档分组（可选）</span>
+                        <input type="text" name="archiveGroup" placeholder="例如：项目A">
+                    </label>
+                    <div class="attachments-uploader">
+                        <div class="attachment-actions">
+                            <button type="button" id="attach-files-btn" class="ghost small">添加文件</button>
+                            <button type="button" id="attach-folder-btn" class="ghost small">添加文件夹</button>
+                            <input type="file" id="attach-files-input" class="hidden" multiple>
+                            <input type="file" id="attach-folder-input" class="hidden" webkitdirectory directory>
+                        </div>
+                        <ul id="compose-attachment-list" class="compose-attachment-list"></ul>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" id="save-draft" class="ghost">保存草稿</button>
+                    <button type="submit" class="primary">发送</button>
+                </div>
+                <p id="compose-message" class="form-message" role="alert"></p>
+            </form>
+        </div>
+    </div>
+
+    <div id="archive-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="archive-title">
+        <div class="modal-backdrop" id="archive-backdrop"></div>
+        <div class="modal-dialog small">
+            <form id="archive-form" class="modal-content">
+                <div class="modal-header">
+                    <h2 id="archive-title">设置归档分组</h2>
+                    <button type="button" id="archive-close" class="ghost icon" aria-label="关闭">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <label class="field">
+                        <span>归档分组名称</span>
+                        <input type="text" id="archive-group-input" list="archive-group-suggestions" placeholder="例如：项目A">
+                    </label>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" id="archive-cancel" class="ghost">取消</button>
+                    <button type="submit" class="primary">确认</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    <datalist id="archive-group-suggestions"></datalist>
+
+    <div id="contacts-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="contacts-title">
+        <div class="modal-backdrop" id="contacts-backdrop"></div>
+        <div class="modal-dialog wide">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2 id="contacts-title">联系人管理</h2>
+                    <button type="button" id="contacts-close" class="ghost icon" aria-label="关闭">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                </div>
+                <div class="modal-body contacts-body">
+                    <section class="contacts-list-section">
+                        <ul id="contacts-group-list" class="contacts-group-list"></ul>
+                    </section>
+                    <aside class="contacts-form-section">
+                        <form id="contact-form" class="stack">
+                            <label class="field">
+                                <span>用户名</span>
+                                <input type="text" name="username" placeholder="团队成员用户名" required>
+                            </label>
+                            <label class="field">
+                                <span>显示名称（可选）</span>
+                                <input type="text" name="alias" placeholder="联系人别名">
+                            </label>
+                            <label class="field">
+                                <span>分组（可选）</span>
+                                <input type="text" name="group" placeholder="例如：产品组">
+                            </label>
+                            <button type="submit" class="primary">添加联系人</button>
+                        </form>
+                        <p id="contact-message" class="form-message" role="alert"></p>
+                    </aside>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+    <script src="/static/js/app.js" defer></script>
+</body>
+</html>
