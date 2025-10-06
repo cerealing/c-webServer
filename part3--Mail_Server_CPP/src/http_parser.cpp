@@ -13,6 +13,7 @@ static int parse_request_line(http_request_t *req, const char *line) {
     }
     req->method = HTTP_UNKNOWN;
     if (strcmp(method, "GET") == 0) req->method = HTTP_GET;
+    else if (strcmp(method, "HEAD") == 0) req->method = HTTP_HEAD;
     else if (strcmp(method, "POST") == 0) req->method = HTTP_POST;
     else if (strcmp(method, "PUT") == 0) req->method = HTTP_PUT;
     else if (strcmp(method, "DELETE") == 0) req->method = HTTP_DELETE;

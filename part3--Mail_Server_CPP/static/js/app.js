@@ -13,6 +13,7 @@ const FOLDER_LABELS = {
 const MESSAGE_EMPTY_TEXT = "暂无邮件";
 const NO_SUBJECT_TEXT = "（无主题）";
 const DEFAULT_ARCHIVE_GROUP = "未分组";
+const CONTACT_DEFAULT_GROUP = "未分组";
 
 const state = {
     token: null,
@@ -197,6 +198,175 @@ function updateArchiveSuggestions() {
         option.value = group;
         elements.archiveSuggestions.appendChild(option);
     });
+}
+
+function normalizeContactGroup(groupName) {
+    const trimmed = (groupName || "").trim();
+    return trimmed.length ? trimmed : CONTACT_DEFAULT_GROUP;
+}
+
+function contactDisplayName(contact) {
+    const alias = (contact.alias || "").trim();
+    if (alias.length) return alias;
+    return `用户 #${contact.contactUserId}`;
+}
+
+function sortContacts(list) {
+    const compareGroups = (a, b) => {
+        if (a === b) return 0;
+        if (a === CONTACT_DEFAULT_GROUP) return -1;
+        if (b === CONTACT_DEFAULT_GROUP) return 1;
+        return a.localeCompare(b, "zh-CN");
+    };
+    return [...list].sort((a, b) => {
+        const ga = normalizeContactGroup(a.groupName);
+        const gb = normalizeContactGroup(b.groupName);
+        const groupCompare = compareGroups(ga, gb);
+        if (groupCompare !== 0) return groupCompare;
+        const nameA = contactDisplayName(a);
+        const nameB = contactDisplayName(b);
+        return nameA.localeCompare(nameB, "zh-CN");
+    });
+}
+
+function renderContactsStatus(message) {
+    if (!elements.contactsGroupList) return;
+    elements.contactsGroupList.innerHTML = "";
+    const li = document.createElement("li");
+    li.className = "contacts-empty";
+    li.textContent = message;
+    elements.contactsGroupList.appendChild(li);
+}
+
+function renderContacts() {
+    if (!elements.contactsGroupList) return;
+    const contacts = sortContacts(state.contacts);
+    if (!contacts.length) {
+        renderContactsStatus("尚未添加联系人");
+        return;
+    }
+
+    const grouped = new Map();
+    contacts.forEach((contact) => {
+        const groupName = normalizeContactGroup(contact.groupName);
+        if (!grouped.has(groupName)) {
+            grouped.set(groupName, []);
+        }
+        grouped.get(groupName).push(contact);
+    });
+
+    const entries = Array.from(grouped.entries()).sort((a, b) => {
+        const ga = a[0];
+        const gb = b[0];
+        if (ga === gb) return 0;
+        if (ga === CONTACT_DEFAULT_GROUP) return -1;
+        if (gb === CONTACT_DEFAULT_GROUP) return 1;
+        return ga.localeCompare(gb, "zh-CN");
+    });
+
+    elements.contactsGroupList.innerHTML = "";
+    entries.forEach(([groupName, items]) => {
+        const li = document.createElement("li");
+        li.className = "contacts-group";
+
+        const heading = document.createElement("h3");
+        heading.textContent = groupName;
+        li.appendChild(heading);
+
+        const list = document.createElement("ul");
+        list.className = "contacts-items";
+
+        items.forEach((contact) => {
+            const item = document.createElement("li");
+            item.className = "contacts-item";
+
+            const strong = document.createElement("strong");
+            strong.textContent = contactDisplayName(contact);
+
+            const meta = document.createElement("span");
+            meta.textContent = `ID ${contact.contactUserId}`;
+
+            item.append(strong, meta);
+            list.appendChild(item);
+        });
+
+        li.appendChild(list);
+        elements.contactsGroupList.appendChild(li);
+    });
+}
+
+async function loadContacts(force = false) {
+    if (state.contactsLoaded && !force) {
+        renderContacts();
+        return;
+    }
+    renderContactsStatus("正在加载联系人…");
+    try {
+        const data = await api("/api/contacts");
+        state.contacts = Array.isArray(data.contacts) ? data.contacts : [];
+        state.contactsLoaded = true;
+        renderContacts();
+    } catch (err) {
+        console.error("failed to load contacts", err);
+        renderContactsStatus(err.message || "无法加载联系人");
+        showToast(err.message || "无法加载联系人", "error");
+    }
+}
+
+function openContactsModal() {
+    if (!elements.contactsModal) return;
+    elements.contactsModal.classList.remove("hidden");
+    elements.contactMessage && (elements.contactMessage.textContent = "");
+    loadContacts();
+}
+
+function closeContactsModal() {
+    if (!elements.contactsModal) return;
+    elements.contactsModal.classList.add("hidden");
+    elements.contactMessage && (elements.contactMessage.textContent = "");
+}
+
+async function submitContactForm(event) {
+    if (!elements.contactForm) return;
+    event.preventDefault();
+    const form = elements.contactForm;
+    const data = new FormData(form);
+    const username = data.get("username")?.toString().trim();
+    const alias = data.get("alias")?.toString().trim();
+    const group = data.get("group")?.toString().trim();
+
+    if (!username) {
+        if (elements.contactMessage) elements.contactMessage.textContent = "用户名不能为空";
+        return;
+    }
+
+    if (elements.contactMessage) elements.contactMessage.textContent = "正在添加联系人…";
+
+    const payload = { username };
+    if (alias) payload.alias = alias;
+    if (group) payload.groupName = group;
+
+    try {
+        const resp = await api("/api/contacts", {
+            method: "POST",
+            body: payload
+        });
+        const contact = resp.contact;
+        if (contact) {
+            state.contacts.push(contact);
+            state.contactsLoaded = true;
+            renderContacts();
+            form.reset();
+            if (elements.contactMessage) elements.contactMessage.textContent = "联系人已添加";
+            showToast("联系人已添加");
+        } else {
+            if (elements.contactMessage) elements.contactMessage.textContent = "已保存，但服务器未返回联系人详情";
+        }
+    } catch (err) {
+        console.error("failed to add contact", err);
+        if (elements.contactMessage) elements.contactMessage.textContent = err.message || "无法添加联系人";
+        showToast(err.message || "无法添加联系人", "error");
+    }
 }
 
 function bytesToSize(bytes) {
@@ -609,6 +779,10 @@ function registerEventListeners() {
     elements.composeButton?.addEventListener("click", () => openCompose());
     elements.composeClose?.addEventListener("click", () => closeCompose());
     elements.composeBackdrop?.addEventListener("click", () => closeCompose());
+    elements.contactsButton?.addEventListener("click", () => openContactsModal());
+    elements.contactsClose?.addEventListener("click", () => closeContactsModal());
+    elements.contactsBackdrop?.addEventListener("click", () => closeContactsModal());
+    elements.contactForm?.addEventListener("submit", submitContactForm);
     elements.starToggle?.addEventListener("click", () => toggleStar());
     elements.archiveToggle?.addEventListener("click", () => toggleArchive());
     elements.saveDraft?.addEventListener("click", (ev) => {
@@ -620,8 +794,12 @@ function registerEventListeners() {
         submitCompose(false);
     });
     document.addEventListener("keydown", (ev) => {
-        if (ev.key === "Escape" && !elements.composeModal?.classList.contains("hidden")) {
+        if (ev.key !== "Escape") return;
+        if (elements.composeModal && !elements.composeModal.classList.contains("hidden")) {
             closeCompose();
+        }
+        if (elements.contactsModal && !elements.contactsModal.classList.contains("hidden")) {
+            closeContactsModal();
         }
     });
 }

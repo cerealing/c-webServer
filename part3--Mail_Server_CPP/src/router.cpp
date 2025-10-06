@@ -1469,38 +1469,41 @@ int router_handle_request(ServerRuntime *rt, http_request_t *req, RouterResult *
     const char *query = NULL;
     split_path_query(req->path, path, sizeof(path), &query);
 
-    if (req->method == HTTP_GET && strncmp(path, "/static/", 8) == 0) {
+    const bool is_head = (req->method == HTTP_HEAD);
+    const http_method_t effective_method = is_head ? HTTP_GET : req->method;
+
+    if (effective_method == HTTP_GET && strncmp(path, "/static/", 8) == 0) {
         respond_with_static(rt, &out->response, path + 8);
-        return 0;
+        goto finalize;
     }
-    if (req->method == HTTP_GET && (strcmp(path, "/") == 0 || strcmp(path, "/index.html") == 0)) {
+    if (effective_method == HTTP_GET && (strcmp(path, "/") == 0 || strcmp(path, "/index.html") == 0)) {
         respond_with_static(rt, &out->response, "learn.html");
-        return 0;
+        goto finalize;
     }
-    if (req->method == HTTP_GET && strcmp(path, "/learn.html") == 0) {
+    if (effective_method == HTTP_GET && strcmp(path, "/learn.html") == 0) {
         respond_with_static(rt, &out->response, "learn.html");
-        return 0;
+        goto finalize;
     }
-    if (req->method == HTTP_GET && (strcmp(path, "/mail") == 0 || strcmp(path, "/mail/") == 0)) {
+    if (effective_method == HTTP_GET && (strcmp(path, "/mail") == 0 || strcmp(path, "/mail/") == 0)) {
         template_var_t vars[] = {
             {"title", "MailCenter 登录"}
         };
         respond_with_template(rt, &out->response, "login.html", vars, sizeof(vars)/sizeof(vars[0]));
-        return 0;
+        goto finalize;
     }
-    if (req->method == HTTP_GET && (strcmp(path, "/mail/app") == 0 || strcmp(path, "/mail/app/") == 0 || strcmp(path, "/app") == 0)) {
+    if (effective_method == HTTP_GET && (strcmp(path, "/mail/app") == 0 || strcmp(path, "/mail/app/") == 0 || strcmp(path, "/app") == 0)) {
         template_var_t vars[] = {
             {"title", "收件箱"}
         };
         respond_with_template(rt, &out->response, "app.html", vars, sizeof(vars)/sizeof(vars[0]));
-        return 0;
+        goto finalize;
     }
     if (strncmp(path, "/api/", 5) == 0) {
         handle_api(rt, req, &out->response, path, query);
-        return 0;
+        goto finalize;
     }
 
-    if (req->method == HTTP_GET && strncmp(path, "/mail", 5) != 0 && strncmp(path, "/api/", 5) != 0 && strncmp(path, "/static/", 8) != 0) {
+    if (effective_method == HTTP_GET && strncmp(path, "/mail", 5) != 0 && strncmp(path, "/api/", 5) != 0 && strncmp(path, "/static/", 8) != 0) {
         const char *rel = path;
         while (*rel == '/') rel++;
         if (*rel == '\0') {
@@ -1508,10 +1511,16 @@ int router_handle_request(ServerRuntime *rt, http_request_t *req, RouterResult *
         } else {
             respond_with_static(rt, &out->response, rel);
         }
-        return 0;
+        goto finalize;
     }
 
     respond_with_error(&out->response, 404, "not_found", "Resource not found");
+
+finalize:
+    if (is_head && out->response.body) {
+        free(out->response.body);
+        out->response.body = NULL;
+    }
     return 0;
 }
 

@@ -4,6 +4,7 @@
 #include <stddef.h>
 
 typedef enum {
+    HTTP_HEAD,
     HTTP_GET,
     HTTP_POST,
     HTTP_PUT,

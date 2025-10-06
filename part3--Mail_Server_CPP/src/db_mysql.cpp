@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <time.h>
+#include <memory>
 
 struct db_handle {
     mail::ServerConfig config;
@@ -154,8 +155,7 @@ int db_init(const mail::ServerConfig &cfg, db_handle_t **out) {
         return -1;
     }
 
-    db_handle_t *db = static_cast<db_handle_t *>(calloc(1, sizeof(*db)));
-    if (!db) return -1;
+    std::unique_ptr<db_handle_t> db = std::make_unique<db_handle_t>();
     db->config = cfg;
     db->pool_size = cfg.mysql.pool_size > 0 ? static_cast<size_t>(cfg.mysql.pool_size) : 4;
     db->pool = static_cast<MYSQL **>(calloc(db->pool_size, sizeof(MYSQL *)));
@@ -163,7 +163,6 @@ int db_init(const mail::ServerConfig &cfg, db_handle_t **out) {
     if (!db->pool || !db->busy) {
         free(db->pool);
         free(db->busy);
-        free(db);
         mysql_library_end();
         return -1;
     }
@@ -174,30 +173,30 @@ int db_init(const mail::ServerConfig &cfg, db_handle_t **out) {
         MYSQL *conn = mysql_init(NULL);
         if (!conn) {
             LOGF("mysql: init failed");
-            db_close(db);
+            db_close(db.release());
             return -1;
         }
         mysql_options(conn, MYSQL_SET_CHARSET_NAME, "utf8mb4");
-    if (!mysql_real_connect(conn,
-                cfg.mysql.host.c_str(),
-                cfg.mysql.user.c_str(),
-                cfg.mysql.password.c_str(),
-                cfg.mysql.database.c_str(),
-                cfg.mysql.port,
+        if (!mysql_real_connect(conn,
+                                cfg.mysql.host.c_str(),
+                                cfg.mysql.user.c_str(),
+                                cfg.mysql.password.c_str(),
+                                cfg.mysql.database.c_str(),
+                                cfg.mysql.port,
                                 NULL,
                                 CLIENT_MULTI_STATEMENTS)) {
             LOGF("mysql: connect failed: %s", mysql_error(conn));
             mysql_close(conn);
-            db_close(db);
+            db_close(db.release());
             return -1;
         }
         mysql_query(conn, "SET time_zone = '+00:00'");
         db->pool[i] = conn;
     }
 
-    MYSQL *conn = acquire_conn(db);
+    MYSQL *conn = acquire_conn(db.get());
     if (!conn) {
-        db_close(db);
+        db_close(db.release());
         return -1;
     }
     if (mysql_query(conn, "CREATE TABLE IF NOT EXISTS users ("
@@ -208,8 +207,8 @@ int db_init(const mail::ServerConfig &cfg, db_handle_t **out) {
                          "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP"
                          ")") != 0) {
         LOGF("mysql: create users failed: %s", mysql_error(conn));
-        release_conn(db, conn);
-        db_close(db);
+        release_conn(db.get(), conn);
+        db_close(db.release());
         return -1;
     }
     if (mysql_query(conn, "CREATE TABLE IF NOT EXISTS folders ("
@@ -221,8 +220,8 @@ int db_init(const mail::ServerConfig &cfg, db_handle_t **out) {
                          "UNIQUE KEY unique_folder(owner_id, kind, name)"
                          ")") != 0) {
         LOGF("mysql: create folders failed: %s", mysql_error(conn));
-        release_conn(db, conn);
-        db_close(db);
+        release_conn(db.get(), conn);
+        db_close(db.release());
         return -1;
     }
     if (mysql_query(conn, "CREATE TABLE IF NOT EXISTS messages ("
@@ -241,8 +240,8 @@ int db_init(const mail::ServerConfig &cfg, db_handle_t **out) {
                          "updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
                          ")") != 0) {
         LOGF("mysql: create messages failed: %s", mysql_error(conn));
-        release_conn(db, conn);
-        db_close(db);
+        release_conn(db.get(), conn);
+        db_close(db.release());
         return -1;
     }
     if (mysql_query(conn, "CREATE TABLE IF NOT EXISTS attachments ("
@@ -257,8 +256,8 @@ int db_init(const mail::ServerConfig &cfg, db_handle_t **out) {
                          "KEY message_idx(message_id)"
                          ")") != 0) {
         LOGF("mysql: create attachments failed: %s", mysql_error(conn));
-        release_conn(db, conn);
-        db_close(db);
+        release_conn(db.get(), conn);
+        db_close(db.release());
         return -1;
     }
     if (mysql_query(conn, "CREATE TABLE IF NOT EXISTS contacts ("
@@ -271,16 +270,16 @@ int db_init(const mail::ServerConfig &cfg, db_handle_t **out) {
                          "UNIQUE KEY uniq_contact(user_id, contact_user_id)"
                          ")") != 0) {
         LOGF("mysql: create contacts failed: %s", mysql_error(conn));
-        release_conn(db, conn);
-        db_close(db);
+        release_conn(db.get(), conn);
+        db_close(db.release());
         return -1;
     }
     ensure_column(conn, "ALTER TABLE messages ADD COLUMN archive_group VARCHAR(64) NOT NULL DEFAULT '' AFTER custom_folder");
     ensure_column(conn, "ALTER TABLE attachments ADD COLUMN relative_path VARCHAR(256) NOT NULL DEFAULT '' AFTER storage_path");
     ensure_column(conn, "ALTER TABLE contacts ADD COLUMN group_name VARCHAR(64) NOT NULL DEFAULT '' AFTER alias");
-    release_conn(db, conn);
+    release_conn(db.get(), conn);
 
-    *out = db;
+    *out = db.release();
     return 0;
 }
 
@@ -295,7 +294,7 @@ void db_close(db_handle_t *db) {
     pthread_cond_destroy(&db->cond);
     free(db->busy);
     free(db->pool);
-    free(db);
+    delete db;
     mysql_library_end();
 }
 

@@ -33,3 +33,14 @@
 2025-10-06 16:01:49 [INFO] auth/mail/template services initialized
 2025-10-06 16:01:49 [INFO] signal handlers registered
 2025-10-06 16:01:49 [INFO] server listening on 0.0.0.0:8085
+2025-10-06 21:12:36 [INFO] logger initialized (target=logs/server.log)
+2025-10-06 21:12:36 [INFO] thread pool ready with 8 threads
+2025-10-06 21:12:36 [INFO] response queue initialized
+2025-10-06 21:12:36 [INFO] stub db: begin seeding
+2025-10-06 21:12:36 [INFO] stub db: users=5
+2025-10-06 21:12:36 [INFO] stub db: folders=25
+2025-10-06 21:12:36 [INFO] stub db: messages=16 contacts=5
+2025-10-06 21:12:36 [INFO] database backend ready
+2025-10-06 21:12:36 [INFO] auth/mail/template services initialized
+2025-10-06 21:12:36 [INFO] signal handlers registered
+2025-10-06 21:12:36 [INFO] server listening on 0.0.0.0:8085

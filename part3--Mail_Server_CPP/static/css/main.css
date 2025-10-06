@@ -664,6 +664,14 @@ button.full {
     color: var(--text-primary);
 }
 
+.contacts-empty {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    padding: 0.75rem 1rem;
+    background: rgba(16, 24, 40, 0.04);
+    border-radius: 12px;
+}
+
 .contacts-form-section {
     flex: 1;
     min-width: 240px;
