@@ -26,9 +26,9 @@ CREATE TABLE IF NOT EXISTS messages (
     owner_id      BIGINT UNSIGNED NOT NULL,
     folder        INT NOT NULL,
     custom_folder VARCHAR(64) NOT NULL DEFAULT '',
+    archive_group VARCHAR(64) NOT NULL DEFAULT '',
     subject       VARCHAR(256) NOT NULL,
     body          MEDIUMTEXT NOT NULL,
-    recipients    VARCHAR(256) NOT NULL,
     is_starred    TINYINT(1) NOT NULL DEFAULT 0,
     is_draft      TINYINT(1) NOT NULL DEFAULT 0,
     is_archived   TINYINT(1) NOT NULL DEFAULT 0,
@@ -36,6 +36,18 @@ CREATE TABLE IF NOT EXISTS messages (
     updated_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     KEY idx_messages_owner_folder(owner_id, folder, custom_folder),
     CONSTRAINT fk_messages_owner FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS message_recipients (
+    id                  BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    message_id          BIGINT UNSIGNED NOT NULL,
+    recipient_user_id   BIGINT UNSIGNED NULL,
+    recipient_username  VARCHAR(64) NOT NULL,
+    created_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uniq_message_recipient(message_id, recipient_username),
+    KEY idx_message_recipient_user(recipient_user_id),
+    CONSTRAINT fk_recipient_message FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+    CONSTRAINT fk_recipient_user FOREIGN KEY (recipient_user_id) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS attachments (

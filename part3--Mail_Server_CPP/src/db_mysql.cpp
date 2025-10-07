@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <time.h>
 #include <memory>
+#include <ctype.h>
 
 struct db_handle {
     mail::ServerConfig config;
@@ -70,6 +71,135 @@ static void ensure_column(MYSQL *conn, const char *sql) {
     }
 }
 
+static void ensure_constraint(MYSQL *conn, const char *sql) {
+    if (mysql_query(conn, sql) != 0) {
+        unsigned int err = mysql_errno(conn);
+        if (err != 1826 && err != 1061 && err != 1022) {
+            LOGW("mysql: %s failed: %s", sql, mysql_error(conn));
+        }
+    }
+}
+
+static int username_to_user_id(db_handle_t *db, MYSQL *conn, const char *username, uint64_t *out_id);
+
+static bool column_exists(MYSQL *conn, const char *table, const char *column) {
+    char query[2048];
+    snprintf(query, sizeof(query),
+             "SELECT COUNT(*) FROM information_schema.COLUMNS "
+             "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '%s' AND COLUMN_NAME = '%s'",
+             table, column);
+    if (mysql_query(conn, query) != 0) {
+        LOGE("mysql: column_exists failed: %s", mysql_error(conn));
+        return false;
+    }
+    MYSQL_RES *res = mysql_store_result(conn);
+    if (!res) {
+        LOGE("mysql: column_exists store_result failed: %s", mysql_error(conn));
+        return false;
+    }
+    MYSQL_ROW row = mysql_fetch_row(res);
+    bool exists = row && row[0] && strcmp(row[0], "0") != 0;
+    mysql_free_result(res);
+    return exists;
+}
+
+static int insert_message_recipients(db_handle_t *db, MYSQL *conn, uint64_t message_id, const char *recipients) {
+    if (!recipients || !*recipients) {
+        char cleanup[256];
+        snprintf(cleanup, sizeof(cleanup),
+                 "DELETE FROM message_recipients WHERE message_id=%llu",
+                 (unsigned long long)message_id);
+        mysql_query(conn, cleanup);
+        return 0;
+    }
+
+    char cleanup[256];
+    snprintf(cleanup, sizeof(cleanup),
+             "DELETE FROM message_recipients WHERE message_id=%llu",
+             (unsigned long long)message_id);
+    mysql_query(conn, cleanup);
+
+    char buffer[RECIPIENT_MAX];
+    strncpy(buffer, recipients, sizeof(buffer) - 1);
+    buffer[sizeof(buffer) - 1] = '\0';
+
+    char *saveptr = NULL;
+    char *token = strtok_r(buffer, ",", &saveptr);
+    while (token) {
+        while (*token && isspace((unsigned char)*token)) token++;
+        size_t len = strlen(token);
+        while (len > 0 && isspace((unsigned char)token[len - 1])) {
+            token[--len] = '\0';
+        }
+        if (*token) {
+            char *esc_name = NULL;
+            escape_dup(conn, token, &esc_name);
+            uint64_t rid = 0;
+            int has_user = username_to_user_id(db, conn, token, &rid);
+            char query[512];
+            if (has_user == 0) {
+                snprintf(query, sizeof(query),
+                         "INSERT INTO message_recipients (message_id, recipient_user_id, recipient_username) "
+                         "VALUES (%llu, %llu, '%s') "
+                         "ON DUPLICATE KEY UPDATE recipient_user_id=VALUES(recipient_user_id)",
+                         (unsigned long long)message_id,
+                         (unsigned long long)rid,
+                         esc_name ? esc_name : "");
+            } else {
+                snprintf(query, sizeof(query),
+                         "INSERT INTO message_recipients (message_id, recipient_user_id, recipient_username) "
+                         "VALUES (%llu, NULL, '%s') "
+                         "ON DUPLICATE KEY UPDATE recipient_username=VALUES(recipient_username)",
+                         (unsigned long long)message_id,
+                         esc_name ? esc_name : "");
+            }
+            if (mysql_query(conn, query) != 0) {
+                LOGE("mysql: insert message recipient failed: %s", mysql_error(conn));
+                free(esc_name);
+                return -1;
+            }
+            free(esc_name);
+        }
+        token = strtok_r(NULL, ",", &saveptr);
+    }
+    return 0;
+}
+
+static int migrate_recipients_column(db_handle_t *db, MYSQL *conn) {
+    if (!column_exists(conn, "messages", "recipients")) {
+        return 0;
+    }
+
+    if (mysql_query(conn, "SELECT id, recipients FROM messages WHERE recipients IS NOT NULL AND recipients <> ''") != 0) {
+        LOGE("mysql: migrate recipients select failed: %s", mysql_error(conn));
+        return -1;
+    }
+    MYSQL_RES *res = mysql_store_result(conn);
+    if (!res) {
+        LOGE("mysql: migrate recipients store_result failed: %s", mysql_error(conn));
+        return -1;
+    }
+    MYSQL_ROW row;
+    while ((row = mysql_fetch_row(res)) != NULL) {
+        uint64_t mid = (uint64_t)strtoull(row[0], NULL, 10);
+        const char *rcpt = row[1] ? row[1] : "";
+        if (insert_message_recipients(db, conn, mid, rcpt) != 0) {
+            mysql_free_result(res);
+            return -1;
+        }
+    }
+    mysql_free_result(res);
+
+    if (mysql_query(conn, "ALTER TABLE messages DROP COLUMN recipients") != 0) {
+        unsigned int err = mysql_errno(conn);
+        if (err != 1091) {
+            LOGE("mysql: drop recipients column failed: %s", mysql_error(conn));
+            return -1;
+        }
+    }
+    return 0;
+}
+
 static void fill_user_row(MYSQL_ROW row, user_record_t *out) {
     memset(out, 0, sizeof(*out));
     out->id = (uint64_t)strtoull(row[0], NULL, 10);
@@ -97,7 +227,11 @@ static void fill_message_row(MYSQL_ROW row, message_record_t *out) {
     strncpy(out->archive_group, row[4], sizeof(out->archive_group) - 1);
     strncpy(out->subject, row[5], sizeof(out->subject) - 1);
     strncpy(out->body, row[6], sizeof(out->body) - 1);
-    strncpy(out->recipients, row[7], sizeof(out->recipients) - 1);
+    if (row[7]) {
+        strncpy(out->recipients, row[7], sizeof(out->recipients) - 1);
+    } else {
+        out->recipients[0] = '\0';
+    }
     out->is_starred = atoi(row[8]);
     out->is_draft = atoi(row[9]);
     out->is_archived = atoi(row[10]);
@@ -228,11 +362,10 @@ int db_init(const mail::ServerConfig &cfg, db_handle_t **out) {
                          "id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,"
                          "owner_id BIGINT UNSIGNED NOT NULL,"
                          "folder INT NOT NULL,"
-                         "custom_folder VARCHAR(64) DEFAULT '',"
-                         "archive_group VARCHAR(64) DEFAULT '',"
+                         "custom_folder VARCHAR(64) NOT NULL DEFAULT '',"
+                         "archive_group VARCHAR(64) NOT NULL DEFAULT '',"
                          "subject VARCHAR(256) NOT NULL,"
                          "body MEDIUMTEXT NOT NULL,"
-                         "recipients VARCHAR(256) NOT NULL,"
                          "is_starred TINYINT(1) NOT NULL DEFAULT 0,"
                          "is_draft TINYINT(1) NOT NULL DEFAULT 0,"
                          "is_archived TINYINT(1) NOT NULL DEFAULT 0,"
@@ -274,9 +407,26 @@ int db_init(const mail::ServerConfig &cfg, db_handle_t **out) {
         db_close(db.release());
         return -1;
     }
+    if (mysql_query(conn, "CREATE TABLE IF NOT EXISTS message_recipients ("
+                         "id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,"
+                         "message_id BIGINT UNSIGNED NOT NULL,"
+                         "recipient_user_id BIGINT UNSIGNED NULL,"
+                         "recipient_username VARCHAR(64) NOT NULL,"
+                         "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+                         "UNIQUE KEY uniq_message_recipient(message_id, recipient_username),"
+                         "KEY idx_message_recipient_user(recipient_user_id)"
+                         ")") != 0) {
+        LOGF("mysql: create message_recipients failed: %s", mysql_error(conn));
+        release_conn(db.get(), conn);
+        db_close(db.release());
+        return -1;
+    }
+    ensure_constraint(conn, "ALTER TABLE message_recipients ADD CONSTRAINT fk_recipient_message FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE");
+    ensure_constraint(conn, "ALTER TABLE message_recipients ADD CONSTRAINT fk_recipient_user FOREIGN KEY (recipient_user_id) REFERENCES users(id) ON DELETE SET NULL");
     ensure_column(conn, "ALTER TABLE messages ADD COLUMN archive_group VARCHAR(64) NOT NULL DEFAULT '' AFTER custom_folder");
     ensure_column(conn, "ALTER TABLE attachments ADD COLUMN relative_path VARCHAR(256) NOT NULL DEFAULT '' AFTER storage_path");
     ensure_column(conn, "ALTER TABLE contacts ADD COLUMN group_name VARCHAR(64) NOT NULL DEFAULT '' AFTER alias");
+    migrate_recipients_column(db.get(), conn);
     release_conn(db.get(), conn);
 
     *out = db.release();
@@ -303,7 +453,7 @@ int db_authenticate(db_handle_t *db, const char *username, const char *password,
     if (!conn) return -1;
     char *esc_user = NULL;
     escape_dup(conn, username, &esc_user);
-    char query[512];
+    char query[2048];
     snprintf(query, sizeof(query),
              "SELECT id, username, email, password_hash, UNIX_TIMESTAMP(created_at) "
              "FROM users WHERE username='%s' LIMIT 1",
@@ -489,22 +639,34 @@ int db_create_folder(db_handle_t *db, uint64_t user_id, const char *name, folder
     return rc;
 }
 
-static int list_messages_internal(db_handle_t *db, MYSQL *conn, uint64_t user_id, folder_kind_t folder, const char *custom, message_list_t *out) {
+static int list_messages_internal(MYSQL *conn, uint64_t user_id, folder_kind_t folder, const char *custom, message_list_t *out) {
     char query[1024];
     if (folder == FOLDER_CUSTOM && custom && *custom) {
         char *esc_custom = NULL;
         escape_dup(conn, custom, &esc_custom);
         snprintf(query, sizeof(query),
-                 "SELECT id, owner_id, folder, custom_folder, archive_group, subject, body, recipients, is_starred, is_draft, is_archived, "
-                 "UNIX_TIMESTAMP(created_at), UNIX_TIMESTAMP(updated_at) "
-                 "FROM messages WHERE owner_id=%llu AND folder=%d AND custom_folder='%s' ORDER BY updated_at DESC",
+                 "SELECT m.id, m.owner_id, m.folder, m.custom_folder, m.archive_group, m.subject, m.body, "
+                 "COALESCE(r.recipients, '') AS recipients, "
+                 "m.is_starred, m.is_draft, m.is_archived, "
+                 "UNIX_TIMESTAMP(m.created_at), UNIX_TIMESTAMP(m.updated_at) "
+                 "FROM messages m "
+                 "LEFT JOIN (SELECT message_id, GROUP_CONCAT(recipient_username ORDER BY recipient_username SEPARATOR ',') AS recipients "
+                 "           FROM message_recipients GROUP BY message_id) r ON r.message_id = m.id "
+                 "WHERE m.owner_id=%llu AND m.folder=%d AND m.custom_folder='%s' "
+                 "ORDER BY m.updated_at DESC",
                  (unsigned long long)user_id, folder, esc_custom ? esc_custom : "");
         free(esc_custom);
     } else {
         snprintf(query, sizeof(query),
-                 "SELECT id, owner_id, folder, custom_folder, archive_group, subject, body, recipients, is_starred, is_draft, is_archived, "
-                 "UNIX_TIMESTAMP(created_at), UNIX_TIMESTAMP(updated_at) "
-                 "FROM messages WHERE owner_id=%llu AND folder=%d ORDER BY updated_at DESC",
+                 "SELECT m.id, m.owner_id, m.folder, m.custom_folder, m.archive_group, m.subject, m.body, "
+                 "COALESCE(r.recipients, '') AS recipients, "
+                 "m.is_starred, m.is_draft, m.is_archived, "
+                 "UNIX_TIMESTAMP(m.created_at), UNIX_TIMESTAMP(m.updated_at) "
+                 "FROM messages m "
+                 "LEFT JOIN (SELECT message_id, GROUP_CONCAT(recipient_username ORDER BY recipient_username SEPARATOR ',') AS recipients "
+                 "           FROM message_recipients GROUP BY message_id) r ON r.message_id = m.id "
+                 "WHERE m.owner_id=%llu AND m.folder=%d "
+                 "ORDER BY m.updated_at DESC",
                  (unsigned long long)user_id, folder);
     }
     if (mysql_query(conn, query) != 0) {
@@ -533,7 +695,7 @@ int db_list_messages(db_handle_t *db, uint64_t user_id, folder_kind_t folder, co
     }
     out->items = NULL;
     out->count = 0;
-    int rc = list_messages_internal(db, conn, user_id, folder, custom, out);
+    int rc = list_messages_internal(conn, user_id, folder, custom, out);
     release_conn(db, conn);
     return rc;
 }
@@ -551,9 +713,14 @@ int db_get_message(db_handle_t *db, uint64_t user_id, uint64_t message_id, messa
     }
     char query[512];
     snprintf(query, sizeof(query),
-             "SELECT id, owner_id, folder, custom_folder, archive_group, subject, body, recipients, is_starred, is_draft, is_archived, "
-             "UNIX_TIMESTAMP(created_at), UNIX_TIMESTAMP(updated_at) "
-             "FROM messages WHERE owner_id=%llu AND id=%llu",
+             "SELECT m.id, m.owner_id, m.folder, m.custom_folder, m.archive_group, m.subject, m.body, "
+             "COALESCE(r.recipients, '') AS recipients, "
+             "m.is_starred, m.is_draft, m.is_archived, "
+             "UNIX_TIMESTAMP(m.created_at), UNIX_TIMESTAMP(m.updated_at) "
+             "FROM messages m "
+             "LEFT JOIN (SELECT message_id, GROUP_CONCAT(recipient_username ORDER BY recipient_username SEPARATOR ',') AS recipients "
+             "           FROM message_recipients GROUP BY message_id) r ON r.message_id = m.id "
+             "WHERE m.owner_id=%llu AND m.id=%llu",
              (unsigned long long)user_id, (unsigned long long)message_id);
     int rc = -1;
     if (mysql_query(conn, query) == 0) {
@@ -589,15 +756,13 @@ int db_get_message(db_handle_t *db, uint64_t user_id, uint64_t message_id, messa
     return rc;
 }
 
-static int insert_message_with_attachments(MYSQL *conn, uint64_t owner_id, const message_record_t *msg, const attachment_list_t *attachments, uint64_t *new_id) {
+static int insert_message_with_attachments(db_handle_t *db, MYSQL *conn, uint64_t owner_id, const message_record_t *msg, const attachment_list_t *attachments, uint64_t *new_id) {
     char *esc_subject = NULL;
     char *esc_body = NULL;
-    char *esc_recipients = NULL;
     char *esc_custom = NULL;
     char *esc_group = NULL;
     escape_dup(conn, msg->subject, &esc_subject);
     escape_dup(conn, msg->body, &esc_body);
-    escape_dup(conn, msg->recipients, &esc_recipients);
     escape_dup(conn, msg->custom_folder, &esc_custom);
     escape_dup(conn, msg->archive_group, &esc_group);
 
@@ -606,21 +771,24 @@ static int insert_message_with_attachments(MYSQL *conn, uint64_t owner_id, const
     int rc = -1;
 
     snprintf(query, sizeof(query),
-             "INSERT INTO messages (owner_id, folder, custom_folder, archive_group, subject, body, recipients, is_starred, is_draft, is_archived) "
-             "VALUES (%llu, %d, '%s', '%s', '%s', '%s', '%s', %d, %d, %d)",
+             "INSERT INTO messages (owner_id, folder, custom_folder, archive_group, subject, body, is_starred, is_draft, is_archived) "
+             "VALUES (%llu, %d, '%s', '%s', '%s', '%s', %d, %d, %d)",
              (unsigned long long)owner_id,
              msg->folder,
              esc_custom ? esc_custom : "",
              esc_group ? esc_group : "",
              esc_subject ? esc_subject : "",
              esc_body ? esc_body : "",
-             esc_recipients ? esc_recipients : "",
              msg->is_starred,
              msg->is_draft,
              msg->is_archived);
 
     if (mysql_query(conn, query) == 0) {
         mid = mysql_insert_id64(conn);
+        if (insert_message_recipients(db, conn, mid, msg->recipients) != 0) {
+            LOGE("mysql: insert message recipients failed for message %llu", (unsigned long long)mid);
+            goto done;
+        }
         if (attachments && attachments->count > 0) {
             for (size_t i = 0; i < attachments->count; ++i) {
                 const attachment_record_t *att = &attachments->items[i];
@@ -664,13 +832,14 @@ static int insert_message_with_attachments(MYSQL *conn, uint64_t owner_id, const
 done:
     free(esc_subject);
     free(esc_body);
-    free(esc_recipients);
     free(esc_custom);
     free(esc_group);
     if (rc != 0 && mid != 0) {
         snprintf(query, sizeof(query), "DELETE FROM attachments WHERE message_id=%llu", (unsigned long long)mid);
         mysql_query(conn, query);
         snprintf(query, sizeof(query), "DELETE FROM messages WHERE id=%llu", (unsigned long long)mid);
+        mysql_query(conn, query);
+        snprintf(query, sizeof(query), "DELETE FROM message_recipients WHERE message_id=%llu", (unsigned long long)mid);
         mysql_query(conn, query);
     }
     return rc;
@@ -707,7 +876,7 @@ int db_save_draft(db_handle_t *db, uint64_t user_id, message_record_t *msg, atta
     msg->is_archived = 0;
     msg->owner_id = user_id;
     msg->custom_folder[0] = '\0';
-    int rc = insert_message_with_attachments(conn, user_id, msg, attachments, &msg->id);
+    int rc = insert_message_with_attachments(db, conn, user_id, msg, attachments, &msg->id);
     release_conn(db, conn);
     return rc;
 }
@@ -731,7 +900,7 @@ int db_send_message(db_handle_t *db, uint64_t user_id, const message_record_t *m
     base.archive_group[0] = '\0';
 
     bool failed = false;
-    if (insert_message_with_attachments(conn, user_id, &base, attachments, NULL) != 0) {
+    if (insert_message_with_attachments(db, conn, user_id, &base, attachments, NULL) != 0) {
         failed = true;
     }
 
@@ -755,7 +924,7 @@ int db_send_message(db_handle_t *db, uint64_t user_id, const message_record_t *m
                     copy.is_archived = 0;
                     copy.is_draft = 0;
                     copy.custom_folder[0] = '\0';
-                    if (insert_message_with_attachments(conn, rid, &copy, attachments, NULL) != 0) {
+                    if (insert_message_with_attachments(db, conn, rid, &copy, attachments, NULL) != 0) {
                         failed = true;
                         break;
                     }

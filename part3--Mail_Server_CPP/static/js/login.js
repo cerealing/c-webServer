@@ -60,12 +60,41 @@ async function registerAccount(username, email, password) {
     return payload;
 }
 
-document.addEventListener("DOMContentLoaded", () => {
-    if (localStorage.getItem(TOKEN_KEY)) {
-        window.location.href = "/app";
-        return;
+async function ensureValidExistingSession() {
+    const token = localStorage.getItem(TOKEN_KEY);
+    if (!token) {
+        return false;
     }
+    try {
+        const resp = await fetch("/api/session", {
+            headers: {
+                "Authorization": `Bearer ${token}`
+            }
+        });
+        if (resp.ok) {
+            let payload = null;
+            try {
+                payload = await resp.json();
+            } catch (_) {
+                payload = null;
+            }
+            if (payload?.user) {
+                localStorage.setItem(USER_KEY, JSON.stringify(payload.user));
+            }
+            window.location.href = "/app";
+            return true;
+        }
+        if (resp.status === 401) {
+            localStorage.removeItem(TOKEN_KEY);
+            localStorage.removeItem(USER_KEY);
+        }
+    } catch (err) {
+        console.error("session check failed", err);
+    }
+    return false;
+}
 
+function setupAuthForms() {
     const loginForm = document.getElementById("login-form");
     const registerForm = document.getElementById("register-form");
     const toggleButtons = document.querySelectorAll("[data-auth-mode]");
@@ -161,5 +190,14 @@ document.addEventListener("DOMContentLoaded", () => {
             console.error("registration failed", err);
             setMessage(err.message || "无法创建账号", true);
         }
+    });
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+    ensureValidExistingSession().then((shouldRedirect) => {
+        if (shouldRedirect) {
+            return;
+        }
+        setupAuthForms();
     });
 });
