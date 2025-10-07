@@ -528,6 +528,41 @@ MailCenter 可以想象成“浏览器 ↔ HTTP 服务器 ↔ 数据库”的三
 
 > 所有建表语句见 `sql/schema.sql`，并附带触发器 `trg_users_default_folders`，在创建新用户时自动生成默认文件夹。
 
+### 关系模式 R（第三范式）
+
+> 这里的 `R` 指的是数据库中所有关系（表）的合集。每个关系都满足第三范式：字段完全依赖主键，且不存在传递依赖。
+
+- **R_users**(`id`, `username`, `email`, `password_hash`, `created_at`)
+  - 主键 `id` 自增；`username` 受唯一索引约束。
+- **R_folders**(`id`, `owner_id` → R_users, `kind`, `name`, `created_at`)
+  - `owner_id` 外键指向用户；`kind` 枚举系统文件夹类型，`name` 用于自定义文件夹显示。
+- **R_messages**(`id`, `owner_id` → R_users, `folder`, `custom_folder`, `archive_group`, `subject`, `body`, `is_starred`, `is_draft`, `is_archived`, `created_at`, `updated_at`)
+  - `folder` 存储系统文件夹枚举，`custom_folder` 用于扩展；布尔字段描述标星、草稿、归档状态。
+- **R_message_recipients**(`id`, `message_id` → R_messages, `recipient_user_id` → R_users 可为空, `recipient_username`, `created_at`)
+  - 将收件人拆成多行记录，既能关联真实用户，也能保留原始用户名字符串。
+- **R_attachments**(`id`, `message_id` → R_messages, `filename`, `storage_path`, `relative_path`, `mime_type`, `size_bytes`, `created_at`)
+  - 附件文件落盘后，这里记录其元数据与访问路径。
+- **R_contacts**(`id`, `user_id` → R_users, `contact_user_id` → R_users, `alias`, `group_name`, `created_at`)
+  - 一条联系人记录建立两个用户之间的有向“关注”关系，可选别名与分组。
+
+> 提示：如果你从旧版本升级，`db_mysql.cpp` 会在启动时调用 `migrate_recipients_column` 自动把 `messages.recipients` 字段拆分到 `message_recipients` 表，确保符合上述模式。
+
+### ER 图速览
+
+下面的 Mermaid 图展示了各表之间的连接方式，帮助初学者快速建立直观印象。
+
+```mermaid
+erDiagram
+    USERS ||--o{ FOLDERS : 拥有
+    USERS ||--o{ MESSAGES : 写入
+    USERS ||--o{ CONTACTS : 保存
+    USERS ||--o{ MESSAGE_RECIPIENTS : 接收
+    MESSAGES ||--o{ MESSAGE_RECIPIENTS : 包含
+    MESSAGES ||--o{ ATTACHMENTS : 附带
+```
+
+> 阅读技巧：若你的 Markdown 查看器暂不支持 Mermaid，可安装 `vscode-markdown-mermaid` 插件或使用在线 Mermaid 渲染器，将上述代码粘贴进去即可得到 ER 图。
+
 ### 典型业务流程
 
 1. **登录**：`/api/login` → `auth_service_login` → `db_authenticate`（检查 `users` 表）。成功后生成 token 写入内存 session。
