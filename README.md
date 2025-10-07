@@ -14,6 +14,12 @@ After finishing this part, you will have a website like [learn](http://cerealing
 
 ## Part 2: Epoll Server
 
+The Epoll version of Part 1. Create a guide on what epoll is and how to use it.
+
 ## Part 3: An Email Server Using MySQL
 
 Looking for a modernized toolchain? Check out `part3--Mail_Server_CPP/` for the C++20 port of the same mail server, built with the identical feature set but compiled via `g++`.
+
+In this part, we utilized a custom buffer, a thread pool, and a database.
+
+### c语言后端；c++后端；EPOLL；数据库；网页服务器；前端；后端；模板；javascript；css；html；自定义缓冲区；线程池；
